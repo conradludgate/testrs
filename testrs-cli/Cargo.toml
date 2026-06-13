@@ -1,0 +1,13 @@
+[package]
+name = "testrs-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Code generator for testrs: resolves fixtures by type and generates the kitest harness."
+
+[[bin]]
+name = "testrs"
+path = "src/main.rs"
+
+[dependencies]

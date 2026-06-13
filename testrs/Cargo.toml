@@ -1,0 +1,10 @@
+[package]
+name = "testrs"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "A pytest-like test framework with compile-time, type-based fixture dependency injection."
+
+[dependencies]
+testrs-macros.workspace = true
