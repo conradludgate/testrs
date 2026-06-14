@@ -63,12 +63,19 @@ pub mod posts {
 }
 
 /// Data-driven tests: one test per parsed vector (like crypto test vectors).
+/// `Doubling` implements `TestCaseName`, so cases are named by it.
 pub mod vectors {
-    use testrs::test;
+    use testrs::{TestCaseName, test};
 
     pub struct Doubling {
         pub input: u32,
         pub doubled: u32,
+    }
+
+    impl TestCaseName for Doubling {
+        fn case_name(&self) -> String {
+            format!("double_{}", self.input)
+        }
     }
 
     /// Parsed at collection time (here inline; in practice from a file).
@@ -83,6 +90,44 @@ pub mod vectors {
     #[test(cases(case = doublings))]
     fn test_doubling(case: &Doubling) {
         assert_eq!(case.input * 2, case.doubled);
+    }
+}
+
+/// Cases named via `Display` (no `Debug`/`TestCaseName`).
+pub mod labelled {
+    use std::fmt;
+    use testrs::test;
+
+    pub struct Label(pub &'static str);
+    impl fmt::Display for Label {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            write!(f, "{}", self.0)
+        }
+    }
+
+    pub fn labels() -> Vec<Label> {
+        vec![Label("alpha"), Label("beta")]
+    }
+
+    #[test(cases(l = labels))]
+    fn test_label(l: &Label) {
+        assert!(!l.0.is_empty());
+    }
+}
+
+/// Cases with no naming trait — fall back to the index.
+pub mod opaque {
+    use testrs::test;
+
+    pub struct Token(pub u32);
+
+    pub fn tokens() -> Vec<Token> {
+        vec![Token(7), Token(9)]
+    }
+
+    #[test(cases(t = tokens))]
+    fn test_token(t: &Token) {
+        assert!(t.0 > 0);
     }
 }
 
