@@ -92,28 +92,30 @@ pub struct TestArgs {
 }
 
 impl TestArgs {
-    /// Parse the process arguments.
+    /// Parse the process arguments. Unknown flags are ignored, so the harness
+    /// tolerates extra libtest-style options it doesn't model.
     pub fn from_env() -> Self {
+        use lexopt::prelude::{Long, Value};
+
         let mut args = TestArgs {
             list: false,
             ignored: false,
             exact: false,
             filters: Vec::new(),
         };
-        let raw: Vec<String> = std::env::args().skip(1).collect();
-        let mut i = 0;
-        while i < raw.len() {
-            match raw[i].as_str() {
-                "--list" => args.list = true,
-                "--ignored" | "--include-ignored" => args.ignored = true,
-                "--exact" => args.exact = true,
-                "--nocapture" => {}
-                // `--format <value>`: skip the value (we only emit `terse`).
-                "--format" => i += 1,
-                flag if flag.starts_with('-') => {}
-                _ => args.filters.push(raw[i].clone()),
+        let mut parser = lexopt::Parser::from_env();
+        while let Ok(Some(arg)) = parser.next() {
+            match arg {
+                Long("list") => args.list = true,
+                Long("ignored" | "include-ignored") => args.ignored = true,
+                Long("exact") => args.exact = true,
+                // `--format <value>`: we only emit `terse`, so just consume it.
+                Long("format") => {
+                    let _ = parser.value();
+                }
+                Value(val) => args.filters.push(val.to_string_lossy().into_owned()),
+                _ => {}
             }
-            i += 1;
         }
         args
     }
