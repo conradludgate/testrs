@@ -16,7 +16,8 @@ use rustdoc_processor::cache::RustdocGlobalFsCache;
 use rustdoc_processor::compute::NoProgress;
 use rustdoc_processor::crate_data::CrateItemIndex;
 use rustdoc_processor::indexing::NoAnnotations;
-use rustdoc_resolver::{TypeAliasResolution, resolve_free_function};
+use rustdoc_ir::Type;
+use rustdoc_resolver::{GenericBindings, TypeAliasResolution, resolve_free_function, resolve_type};
 use rustdoc_types::{Attribute, Id, ItemEnum};
 use syn::parse::Parser;
 
@@ -48,6 +49,17 @@ pub struct Signature {
     pub is_async: bool,
 }
 
+/// A test parameter driven by a `#[test(cases(<param> = <provider>))]` binding.
+/// The test runs once per element of the cartesian product of all its cases.
+pub struct CaseParam {
+    /// The test parameter this provider feeds (expects `&Element`).
+    pub param: String,
+    /// Fully-qualified call path of the provider, e.g. `crate::vectors::vectors`.
+    pub provider_call: String,
+    /// Element type produced by the provider (the `T` in `Vec<T>`).
+    pub element: Type,
+}
+
 /// A discovered fixture or test, with its module-tree position and signature.
 pub struct Discovered {
     pub kind: MarkerKind,
@@ -56,6 +68,8 @@ pub struct Discovered {
     /// itself (suite scope).
     pub module_path: Vec<String>,
     pub sig: Signature,
+    /// Case bindings (empty for ordinary tests/fixtures).
+    pub cases: Vec<CaseParam>,
 }
 
 /// All testrs items discovered in a crate.
@@ -71,11 +85,15 @@ pub struct Discovery {
     pub items: Vec<Discovered>,
 }
 
-/// Return the testrs marker kind carried by an item's attributes, if any.
+/// The testrs marker on an item: its kind, plus any `cases(param = provider)`
+/// bindings (only meaningful on tests).
 ///
 /// Markers ride in the `diagnostic::testrs::<kind>` namespace, which rustdoc
 /// preserves verbatim in `Attribute::Other`.
-fn marker_kind(attrs: &[Attribute]) -> Option<MarkerKind> {
+fn parse_marker(attrs: &[Attribute]) -> Option<(MarkerKind, Vec<(String, syn::Path)>)> {
+    use syn::punctuated::Punctuated;
+    use syn::{Expr, Meta, Token};
+
     for attr in attrs {
         let Attribute::Other(raw) = attr else { continue };
         let Ok(parsed) = syn::Attribute::parse_outer.parse_str(raw) else {
@@ -83,16 +101,76 @@ fn marker_kind(attrs: &[Attribute]) -> Option<MarkerKind> {
         };
         for a in parsed {
             let segs = &a.path().segments;
-            if segs.len() == 3 && segs[0].ident == "diagnostic" && segs[1].ident == "testrs" {
-                return match segs[2].ident.to_string().as_str() {
-                    "fixture" => Some(MarkerKind::Fixture),
-                    "test" => Some(MarkerKind::Test),
-                    _ => None,
-                };
+            if !(segs.len() == 3 && segs[0].ident == "diagnostic" && segs[1].ident == "testrs") {
+                continue;
             }
+            let kind = match segs[2].ident.to_string().as_str() {
+                "fixture" => MarkerKind::Fixture,
+                "test" => MarkerKind::Test,
+                _ => return None,
+            };
+
+            // Look for `cases(param = provider, ...)` among the marker args.
+            let mut cases = Vec::new();
+            if let Meta::List(list) = &a.meta {
+                if let Ok(args) =
+                    list.parse_args_with(Punctuated::<Meta, Token![,]>::parse_terminated)
+                {
+                    for arg in args {
+                        let Meta::List(inner) = arg else { continue };
+                        if !inner.path.is_ident("cases") {
+                            continue;
+                        }
+                        if let Ok(pairs) = inner.parse_args_with(
+                            Punctuated::<syn::MetaNameValue, Token![,]>::parse_terminated,
+                        ) {
+                            for nv in pairs {
+                                if let (Some(param), Expr::Path(provider)) =
+                                    (nv.path.get_ident(), &nv.value)
+                                {
+                                    cases.push((param.to_string(), provider.path.clone()));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            return Some((kind, cases));
         }
     }
     None
+}
+
+/// Resolve a provider path (relative to the test's module, or `crate::`-absolute)
+/// to its `(module_path, name)`.
+fn provider_location(path: &syn::Path, test_module: &[String]) -> (Vec<String>, String) {
+    let segments: Vec<String> = path.segments.iter().map(|s| s.ident.to_string()).collect();
+    let (name, prefix) = segments.split_last().expect("non-empty path");
+    if prefix.first().map(|s| s == "crate").unwrap_or(false) {
+        (prefix[1..].to_vec(), name.clone())
+    } else {
+        let mut module = test_module.to_vec();
+        module.extend_from_slice(prefix);
+        (module, name.clone())
+    }
+}
+
+/// If the raw rustdoc type is `Vec<T>`, return the raw `T`. We peel before
+/// resolving so we never have to resolve `Vec` itself (which needs `alloc`'s docs).
+fn raw_vec_element(output: &rustdoc_types::Type) -> Option<&rustdoc_types::Type> {
+    let rustdoc_types::Type::ResolvedPath(p) = output else {
+        return None;
+    };
+    if p.path != "Vec" && !p.path.ends_with("::Vec") {
+        return None;
+    }
+    let rustdoc_types::GenericArgs::AngleBracketed { args, .. } = p.args.as_deref()? else {
+        return None;
+    };
+    args.iter().find_map(|arg| match arg {
+        rustdoc_types::GenericArg::Type(t) => Some(t),
+        _ => None,
+    })
 }
 
 pub fn discover(manifest_path: &Path, package: &str, toolchain: &str) -> Result<Discovery> {
@@ -168,21 +246,67 @@ pub fn discover(manifest_path: &Path, package: &str, toolchain: &str) -> Result<
         }
     }
 
+    let crate_name = krate.crate_name();
     let mut items = Vec::new();
     for (id, item) in index {
         if !matches!(item.inner, ItemEnum::Function(_)) {
             continue;
         }
-        let Some(kind) = marker_kind(&item.attrs) else {
+        let Some((kind, raw_cases)) = parse_marker(&item.attrs) else {
             continue;
         };
         let name = item.name.clone().unwrap_or_default();
+        let test_module = module_path.get(id).cloned().unwrap_or_default();
         let func = resolve_free_function(item, krate, &collection, TypeAliasResolution::ResolveThrough)
             .map_err(|e| anyhow!("resolving `{name}`: {e:?}"))?;
+
+        let mut cases = Vec::new();
+        for (param, provider_path) in raw_cases {
+            let (pmod, pname) = provider_location(&provider_path, &test_module);
+            let provider_item = index
+                .values()
+                .find(|it| {
+                    matches!(it.inner, ItemEnum::Function(_))
+                        && it.name.as_deref() == Some(pname.as_str())
+                        && module_path.get(&it.id).map(Vec::as_slice) == Some(pmod.as_slice())
+                })
+                .with_context(|| format!("case provider `{pname}` for `{name}` not found"))?;
+            let ItemEnum::Function(provider_fn) = &provider_item.inner else {
+                bail!("case provider `{pname}` is not a function");
+            };
+            if provider_fn.header.is_async {
+                bail!("case provider `{pname}` must be synchronous (async providers unsupported)");
+            }
+            // Peel `Vec<T>` from the raw signature, then resolve just the element `T`.
+            let raw_element = provider_fn
+                .sig
+                .output
+                .as_ref()
+                .and_then(raw_vec_element)
+                .with_context(|| format!("case provider `{pname}` must return `Vec<T>`"))?;
+            let element = resolve_type(
+                raw_element,
+                &pkg_id,
+                &collection,
+                &GenericBindings::default(),
+                TypeAliasResolution::ResolveThrough,
+            )
+            .map_err(|e| anyhow!("resolving case element type of `{pname}`: {e:?}"))?;
+
+            let mut segments = vec![crate_name.clone()];
+            segments.extend(pmod);
+            segments.push(pname);
+            cases.push(CaseParam {
+                param,
+                provider_call: segments.join("::"),
+                element,
+            });
+        }
+
         items.push(Discovered {
             kind,
             name,
-            module_path: module_path.get(id).cloned().unwrap_or_default(),
+            module_path: test_module,
             sig: Signature {
                 inputs: func
                     .header
@@ -193,12 +317,13 @@ pub fn discover(manifest_path: &Path, package: &str, toolchain: &str) -> Result<
                 output: func.header.output.clone(),
                 is_async: func.header.is_async,
             },
+            cases,
         });
     }
     items.sort_by(|a, b| (a.kind, &a.module_path, &a.name).cmp(&(b.kind, &b.module_path, &b.name)));
 
     Ok(Discovery {
-        crate_name: krate.crate_name(),
+        crate_name,
         package_name,
         manifest_dir,
         target_dir,

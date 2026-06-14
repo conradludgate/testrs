@@ -97,6 +97,10 @@ pub fn build(discovery: &Discovery) -> Graph {
     for (ci, consumer) in items.iter().enumerate() {
         let mut edges = Vec::new();
         for (param, param_ty) in &consumer.sig.inputs {
+            // Case parameters are bound to providers, not the fixture graph.
+            if consumer.cases.iter().any(|c| &c.param == param) {
+                continue;
+            }
             let (underlying, ownership) = deref(param_ty);
 
             let in_scope: Vec<usize> = by_type
