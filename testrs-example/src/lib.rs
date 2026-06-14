@@ -115,6 +115,21 @@ pub mod labelled {
     }
 }
 
+/// Tests expected to panic.
+pub mod panics {
+    use testrs::test;
+
+    #[test(should_panic)]
+    fn test_unwrap_none() {
+        Option::<u32>::None.unwrap();
+    }
+
+    #[test(should_panic = "denominator")]
+    fn test_div_zero() {
+        panic!("the denominator was zero");
+    }
+}
+
 /// Cases with no naming trait — fall back to the index.
 pub mod opaque {
     use testrs::test;
