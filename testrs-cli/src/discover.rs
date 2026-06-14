@@ -75,6 +75,14 @@ pub struct CaseParam {
     pub name_strategy: CaseNameStrategy,
 }
 
+/// Whether a test is expected to panic (`#[test(should_panic)]`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ShouldPanic {
+    No,
+    Any,
+    With(String),
+}
+
 /// A discovered fixture or test, with its module-tree position and signature.
 pub struct Discovered {
     pub kind: MarkerKind,
@@ -85,6 +93,8 @@ pub struct Discovered {
     pub sig: Signature,
     /// Case bindings (empty for ordinary tests/fixtures).
     pub cases: Vec<CaseParam>,
+    /// Panic expectation for a test.
+    pub should_panic: ShouldPanic,
 }
 
 /// All testrs items discovered in a crate.
@@ -108,9 +118,9 @@ pub struct Discovery {
 ///
 /// Markers ride in the `diagnostic::testrs::<kind>` namespace, which rustdoc
 /// preserves verbatim in `Attribute::Other`.
-fn parse_marker(attrs: &[Attribute]) -> Option<(MarkerKind, Vec<(String, syn::Path)>)> {
+fn parse_marker(attrs: &[Attribute]) -> Option<(MarkerKind, Vec<(String, syn::Path)>, ShouldPanic)> {
     use syn::punctuated::Punctuated;
-    use syn::{Expr, Meta, Token};
+    use syn::{Expr, ExprLit, Lit, Meta, Token};
 
     for attr in attrs {
         let Attribute::Other(raw) = attr else { continue };
@@ -128,32 +138,43 @@ fn parse_marker(attrs: &[Attribute]) -> Option<(MarkerKind, Vec<(String, syn::Pa
                 _ => return None,
             };
 
-            // Look for `cases(param = provider, ...)` among the marker args.
+            // Parse the marker args: `cases(param = provider, ...)` and
+            // `should_panic` / `should_panic = "expected"`.
             let mut cases = Vec::new();
+            let mut should_panic = ShouldPanic::No;
             if let Meta::List(list) = &a.meta {
                 if let Ok(args) =
                     list.parse_args_with(Punctuated::<Meta, Token![,]>::parse_terminated)
                 {
                     for arg in args {
-                        let Meta::List(inner) = arg else { continue };
-                        if !inner.path.is_ident("cases") {
-                            continue;
-                        }
-                        if let Ok(pairs) = inner.parse_args_with(
-                            Punctuated::<syn::MetaNameValue, Token![,]>::parse_terminated,
-                        ) {
-                            for nv in pairs {
-                                if let (Some(param), Expr::Path(provider)) =
-                                    (nv.path.get_ident(), &nv.value)
-                                {
-                                    cases.push((param.to_string(), provider.path.clone()));
+                        match arg {
+                            Meta::List(inner) if inner.path.is_ident("cases") => {
+                                if let Ok(pairs) = inner.parse_args_with(
+                                    Punctuated::<syn::MetaNameValue, Token![,]>::parse_terminated,
+                                ) {
+                                    for nv in pairs {
+                                        if let (Some(param), Expr::Path(provider)) =
+                                            (nv.path.get_ident(), &nv.value)
+                                        {
+                                            cases.push((param.to_string(), provider.path.clone()));
+                                        }
+                                    }
                                 }
                             }
+                            Meta::Path(p) if p.is_ident("should_panic") => {
+                                should_panic = ShouldPanic::Any;
+                            }
+                            Meta::NameValue(nv) if nv.path.is_ident("should_panic") => {
+                                if let Expr::Lit(ExprLit { lit: Lit::Str(s), .. }) = &nv.value {
+                                    should_panic = ShouldPanic::With(s.value());
+                                }
+                            }
+                            _ => {}
                         }
                     }
                 }
             }
-            return Some((kind, cases));
+            return Some((kind, cases, should_panic));
         }
     }
     None
@@ -277,7 +298,7 @@ pub fn discover(manifest_path: &Path, package: &str, toolchain: &str) -> Result<
         if !matches!(item.inner, ItemEnum::Function(_)) {
             continue;
         }
-        let Some((kind, raw_cases)) = parse_marker(&item.attrs) else {
+        let Some((kind, raw_cases, should_panic)) = parse_marker(&item.attrs) else {
             continue;
         };
         let name = item.name.clone().unwrap_or_default();
@@ -383,6 +404,7 @@ pub fn discover(manifest_path: &Path, package: &str, toolchain: &str) -> Result<
                 is_async: func.header.is_async,
             },
             cases,
+            should_panic,
         });
     }
     items.sort_by(|a, b| (a.kind, &a.module_path, &a.name).cmp(&(b.kind, &b.module_path, &b.name)));

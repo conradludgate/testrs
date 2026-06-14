@@ -16,7 +16,7 @@ use std::fmt::Write;
 use anyhow::{Result, bail};
 use rustdoc_ir::Type;
 
-use crate::discover::{CaseNameStrategy, Discovery, MarkerKind};
+use crate::discover::{CaseNameStrategy, Discovery, MarkerKind, ShouldPanic};
 use crate::graph::{Graph, Node, Ownership};
 
 /// Render a `rustdoc_ir::Type` as Rust source. Paths already carry the crate
@@ -178,9 +178,16 @@ fn emit_test(
     writeln!(out, "                    }});")?;
     writeln!(out, "                }}")?;
     writeln!(out, "            }}),")?;
+    let should_panic = match &item.should_panic {
+        ShouldPanic::No => String::new(),
+        ShouldPanic::Any => "should_panic: PanicExpectation::ShouldPanic, ".to_string(),
+        ShouldPanic::With(msg) => {
+            format!("should_panic: PanicExpectation::ShouldPanicWithExpected({msg:?}.into()), ")
+        }
+    };
     writeln!(
         out,
-        "            TestMeta {{ name: {name_expr}, extra: {key:?}, ..Default::default() }},"
+        "            TestMeta {{ name: {name_expr}, extra: {key:?}, {should_panic}..Default::default() }},"
     )?;
     writeln!(out, "        ));")?;
 
