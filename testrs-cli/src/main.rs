@@ -24,7 +24,13 @@ enum Command {
     /// Generate the kitest harness source for a crate (prints to stdout).
     Generate(Target),
     /// Generate and run the crate's testrs suite (no worktree changes).
-    Test(Target),
+    Test {
+        #[command(flatten)]
+        target: Target,
+        /// Run via `cargo nextest` instead of `cargo test`.
+        #[arg(long)]
+        nextest: bool,
+    },
 }
 
 #[derive(clap::Args)]
@@ -64,14 +70,14 @@ fn main() -> Result<()> {
             print!("{source}");
             Ok(())
         }
-        Command::Test(t) => {
-            let discovery = discover::discover(&t.manifest_path, &t.package, &t.toolchain)?;
+        Command::Test { target, nextest } => {
+            let discovery = discover::discover(&target.manifest_path, &target.package, &target.toolchain)?;
             let g = graph::build(&discovery);
             if !g.errors.is_empty() {
                 graph::print_graph(&discovery, &g);
                 std::process::exit(1);
             }
-            let code = run::run(&discovery, &g)?;
+            let code = run::run(&discovery, &g, nextest)?;
             std::process::exit(code);
         }
     }
