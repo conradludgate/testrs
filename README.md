@@ -74,7 +74,8 @@ testrs = { git = "https://github.com/conradludgate/testrs" }
 ```
 
 `testrs` is the *only* dependency you add — the generated harness pulls in
-`kitest` and `tokio` itself.
+`kitest` itself, and testrs prescribes no async runtime (see
+[Use async fixtures and tests](#use-async-fixtures-and-tests)).
 
 ### 3. Write fixtures and tests
 
@@ -183,8 +184,26 @@ async fn deletes_a_user(db: &Database, user: User) {  // owns a fresh user
 
 ### Use async fixtures and tests
 
-Just write `async fn`. testrs runs everything on a single tokio runtime and
-bridges at the boundaries — you don't add `tokio` to your crate.
+Just write `async fn`. testrs drives each async fixture/test to completion at the
+boundary — it prescribes **no** runtime. By default it uses `testrs::block_on` (a
+minimal, runtime-agnostic executor), which is enough for async that doesn't need a
+reactor.
+
+For async that needs a real runtime (tokio timers/IO, `tokio::spawn`, …), mark one
+function — anywhere in the crate — with `#[testrs::runtime]`, and testrs routes
+every async fixture/test through it:
+
+```rust
+#[testrs::runtime]
+fn rt<F: std::future::Future>(f: F) -> F::Output {
+    use std::sync::OnceLock;
+    static RT: OnceLock<tokio::runtime::Runtime> = OnceLock::new();
+    RT.get_or_init(|| tokio::runtime::Runtime::new().unwrap()).block_on(f)
+}
+```
+
+The runtime is *your* dependency, not testrs's — swap in async-std, smol, or a
+custom `block_on` the same way. At most one `#[runtime]` per crate.
 
 ### Run a test over a table of cases
 
@@ -368,9 +387,9 @@ Defaults: `--manifest-path Cargo.toml`, `--toolchain nightly-2026-04-16`.
 #[fixture] / #[test]          testrs-cli                         generated harness
 ──────────────────────  ──────────────────────────────  ──────────────────────────
 emit #[diagnostic::      1. cargo +nightly rustdoc → JSON   ephemeral crate in target/:
-  testrs::*] markers     2. resolve signatures by type        - tokio runtime
-                         3. build + validate fixture graph     - kitest harness
-                         4. generate the harness               - fixture setup/teardown
+  testrs::*] markers     2. resolve signatures by type        - kitest harness
+                         3. build + validate fixture graph     - fixture setup/teardown
+                         4. generate the harness               - async via #[runtime]
                                                             run via cargo test / nextest
 ```
 
@@ -385,9 +404,10 @@ emit #[diagnostic::      1. cargo +nightly rustdoc → JSON   ephemeral crate in
    module-tree scoping rules, validates it, and topologically orders the
    fixtures.
 4. It generates a [kitest](https://docs.rs/kitest) harness into an **ephemeral
-   crate under `target/`** and runs it. The harness uses a single tokio runtime,
-   groups tests by leaf module, and keeps an active **scope stack** so each
-   shared fixture is built once and torn down when its scope is left.
+   crate under `target/`** and runs it. The harness is runtime-agnostic — it
+   drives async through the crate's `#[runtime]` bridge (or `testrs::block_on` by
+   default) — groups tests by leaf module, and keeps an active **scope stack** so
+   each shared fixture is built once and torn down when its scope is left.
 
 ### Why a CLI instead of macros alone?
 
@@ -400,7 +420,7 @@ injection. The generated harness is plain, inspectable Rust (`testrs generate`).
 
 The harness must be a real cargo **test target** (so `cargo test` and `cargo
 nextest` can build and drive it), but generating it into your worktree would mean
-committing generated code and adding `kitest`/`tokio` dev-dependencies. Instead
+committing generated code and adding a `kitest` dev-dependency. Instead
 it's written under `target/` (gitignored) and regenerated on every run, so it
 can never drift and your crate stays clean.
 
