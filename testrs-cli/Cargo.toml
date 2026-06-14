@@ -21,3 +21,6 @@ rustdoc-types = "=0.57.3"
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }
 syn = { version = "2", features = ["full"] }
+
+[lints]
+workspace = true

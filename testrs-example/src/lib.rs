@@ -128,9 +128,13 @@ pub mod labelled {
 pub mod panics {
     use testrs::test;
 
+    fn lookup() -> Option<u32> {
+        None
+    }
+
     #[test(should_panic)]
     fn test_unwrap_none() {
-        Option::<u32>::None.unwrap();
+        lookup().unwrap();
     }
 
     #[test(should_panic = "denominator")]
@@ -168,6 +172,6 @@ pub mod product {
 
     #[test(cases(l = lefts, r = rights))]
     fn test_sum(l: &u32, r: &u32) {
-        assert_eq!(l + r, r + l);
+        assert!(l + r > *l);
     }
 }

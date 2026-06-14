@@ -23,7 +23,7 @@ use syn::parse::Parser;
 
 /// Nightly toolchain used to emit rustdoc JSON for the target crate. Must emit a
 /// format version matching the `rustdoc-types` version rustdoc-reflection uses
-/// (currently format_version 57 == rustdoc-types 0.57.3).
+/// (currently `format_version` 57 == rustdoc-types 0.57.3).
 pub const DEFAULT_TOOLCHAIN: &str = "nightly-2026-04-16";
 
 /// The kind of testrs marker found on an item.
@@ -118,9 +118,10 @@ pub struct Discovery {
 ///
 /// Markers ride in the `diagnostic::testrs::<kind>` namespace, which rustdoc
 /// preserves verbatim in `Attribute::Other`.
-fn parse_marker(
-    attrs: &[Attribute],
-) -> Option<(MarkerKind, Vec<(String, syn::Path)>, ShouldPanic)> {
+/// A parsed marker: kind, `cases` bindings (param → provider path), panic expectation.
+type ParsedMarker = (MarkerKind, Vec<(String, syn::Path)>, ShouldPanic);
+
+fn parse_marker(attrs: &[Attribute]) -> Option<ParsedMarker> {
     use syn::punctuated::Punctuated;
     use syn::{Expr, ExprLit, Lit, Meta, Token};
 
@@ -146,8 +147,8 @@ fn parse_marker(
             // `should_panic` / `should_panic = "expected"`.
             let mut cases = Vec::new();
             let mut should_panic = ShouldPanic::No;
-            if let Meta::List(list) = &a.meta {
-                if let Ok(args) =
+            if let Meta::List(list) = &a.meta
+                && let Ok(args) =
                     list.parse_args_with(Punctuated::<Meta, Token![,]>::parse_terminated)
                 {
                     for arg in args {
@@ -180,7 +181,6 @@ fn parse_marker(
                         }
                     }
                 }
-            }
             return Some((kind, cases, should_panic));
         }
     }
@@ -192,7 +192,7 @@ fn parse_marker(
 fn provider_location(path: &syn::Path, test_module: &[String]) -> (Vec<String>, String) {
     let segments: Vec<String> = path.segments.iter().map(|s| s.ident.to_string()).collect();
     let (name, prefix) = segments.split_last().expect("non-empty path");
-    if prefix.first().map(|s| s == "crate").unwrap_or(false) {
+    if prefix.first().is_some_and(|s| s == "crate") {
         (prefix[1..].to_vec(), name.clone())
     } else {
         let mut module = test_module.to_vec();
@@ -357,14 +357,11 @@ pub fn discover(manifest_path: &Path, package: &str, toolchain: &str) -> Result<
             let name_strategy = match raw_element {
                 rustdoc_types::Type::Primitive(_) => CaseNameStrategy::Debug,
                 rustdoc_types::Type::ResolvedPath(p) => {
-                    let impls: &[Id] = index
-                        .get(&p.id)
-                        .map(|it| match &it.inner {
-                            ItemEnum::Struct(s) => s.impls.as_slice(),
-                            ItemEnum::Enum(e) => e.impls.as_slice(),
-                            _ => &[][..],
-                        })
-                        .unwrap_or(&[]);
+                    let impls: &[Id] = index.get(&p.id).map_or(&[][..], |it| match &it.inner {
+                        ItemEnum::Struct(s) => s.impls.as_slice(),
+                        ItemEnum::Enum(e) => e.impls.as_slice(),
+                        _ => &[][..],
+                    });
                     let (mut testcasename, mut debug, mut display) = (false, false, false);
                     for impl_id in impls {
                         let Some(ItemEnum::Impl(im)) = index.get(impl_id).map(|it| &it.inner)

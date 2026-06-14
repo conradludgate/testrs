@@ -252,7 +252,8 @@ pub fn generate(discovery: &Discovery, graph: &Graph) -> Result<String> {
     }
 
     // Tests grouped by leaf module; each distinct module path is a group.
-    let mut groups: std::collections::BTreeMap<Vec<String>, Vec<usize>> = Default::default();
+    let mut groups: std::collections::BTreeMap<Vec<String>, Vec<usize>> =
+        std::collections::BTreeMap::new();
     for (i, item) in discovery.items.iter().enumerate() {
         if item.kind == MarkerKind::Test {
             groups.entry(item.module_path.clone()).or_default().push(i);
@@ -347,7 +348,7 @@ pub fn generate(discovery: &Discovery, graph: &Graph) -> Result<String> {
                 call_expr(discovery, fi, &[], "self.handle")
             )?;
         } else {
-            let args = call_args(discovery, node, &Default::default());
+            let args = call_args(discovery, node, &std::collections::HashMap::new());
             writeln!(out, "        let value = FIXTURES.with(|c| {{")?;
             writeln!(out, "            let c = c.borrow();")?;
             writeln!(

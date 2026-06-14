@@ -16,6 +16,8 @@ use crate::graph::Graph;
 
 /// Generate the harness crate and run it, returning its process exit code.
 /// With `nextest`, run it via `cargo nextest run`; otherwise `cargo test`.
+// `{path:?}` deliberately emits a quoted, escaped string for TOML paths.
+#[allow(clippy::unnecessary_debug_formatting)]
 pub fn run(discovery: &Discovery, graph: &Graph, nextest: bool) -> Result<i32> {
     let source = codegen::generate(discovery, graph)?;
 

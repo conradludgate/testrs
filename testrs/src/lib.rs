@@ -46,10 +46,10 @@ impl TestArgs {
             exact: false,
             filters: Vec::new(),
         };
-        let argv: Vec<String> = std::env::args().skip(1).collect();
+        let raw: Vec<String> = std::env::args().skip(1).collect();
         let mut i = 0;
-        while i < argv.len() {
-            match argv[i].as_str() {
+        while i < raw.len() {
+            match raw[i].as_str() {
                 "--list" => args.list = true,
                 "--ignored" | "--include-ignored" => args.ignored = true,
                 "--exact" => args.exact = true,
@@ -57,7 +57,7 @@ impl TestArgs {
                 // `--format <value>`: skip the value (we only emit `terse`).
                 "--format" => i += 1,
                 flag if flag.starts_with('-') => {}
-                _ => args.filters.push(argv[i].clone()),
+                _ => args.filters.push(raw[i].clone()),
             }
             i += 1;
         }

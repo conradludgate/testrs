@@ -8,3 +8,6 @@ description = "A pytest-like test framework with compile-time, type-based fixtur
 
 [dependencies]
 testrs-macros.workspace = true
+
+[lints]
+workspace = true

@@ -84,11 +84,10 @@ pub fn build(discovery: &Discovery) -> Graph {
     // Index fixtures by the type they produce.
     let mut by_type: HashMap<Type, Vec<usize>> = HashMap::new();
     for (i, it) in items.iter().enumerate() {
-        if it.kind == MarkerKind::Fixture {
-            if let Some(out) = &it.sig.output {
+        if it.kind == MarkerKind::Fixture
+            && let Some(out) = &it.sig.output {
                 by_type.entry(out.clone()).or_default().push(i);
             }
-        }
     }
 
     let mut nodes = Vec::new();
@@ -105,8 +104,7 @@ pub fn build(discovery: &Discovery) -> Graph {
 
             let in_scope: Vec<usize> = by_type
                 .get(underlying)
-                .map(Vec::as_slice)
-                .unwrap_or(&[])
+                .map_or(&[][..], Vec::as_slice)
                 .iter()
                 .copied()
                 .filter(|&fi| is_ancestor_or_equal(&items[fi].module_path, &consumer.module_path))
@@ -175,6 +173,13 @@ pub fn build(discovery: &Discovery) -> Graph {
     }
 }
 
+#[derive(Clone, Copy, PartialEq)]
+enum Mark {
+    Unvisited,
+    InProgress,
+    Done,
+}
+
 /// Topologically sort the fixture subgraph (fixture → fixture edges).
 ///
 /// Returns the setup order and, if the graph has a cycle, one cycle as a list of
@@ -195,12 +200,6 @@ fn topo_sort_fixtures(discovery: &Discovery, nodes: &[Node]) -> (Vec<usize>, Opt
         deps.insert(node.item, fixture_deps);
     }
 
-    #[derive(Clone, Copy, PartialEq)]
-    enum Mark {
-        Unvisited,
-        InProgress,
-        Done,
-    }
     let mut state: HashMap<usize, Mark> = deps.keys().map(|&k| (k, Mark::Unvisited)).collect();
     let mut order = Vec::new();
 
