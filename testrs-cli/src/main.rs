@@ -23,7 +23,13 @@ enum Command {
     /// Discover testrs fixtures and tests in a crate and print their resolved signatures.
     Discover(Target),
     /// Build and validate the fixture dependency graph for a crate.
-    Graph(Target),
+    Graph {
+        #[command(flatten)]
+        target: Target,
+        /// Invert the tree: show each fixture and what depends on it.
+        #[arg(long)]
+        invert: bool,
+    },
     /// Generate the kitest harness source for a crate (prints to stdout).
     Generate(Target),
     /// Generate and run the crate's testrs suite (no worktree changes).
@@ -56,10 +62,11 @@ fn main() -> Result<()> {
             discover::print_discovery(&discovery);
             Ok(())
         }
-        Command::Graph(t) => {
-            let discovery = discover::discover(&t.manifest_path, &t.package, &t.toolchain)?;
+        Command::Graph { target, invert } => {
+            let discovery =
+                discover::discover(&target.manifest_path, &target.package, &target.toolchain)?;
             let g = graph::build(&discovery);
-            graph::print_graph(&discovery, &g);
+            graph::print_graph(&discovery, &g, invert);
             if g.errors.is_empty() {
                 Ok(())
             } else {
@@ -78,7 +85,7 @@ fn main() -> Result<()> {
                 discover::discover(&target.manifest_path, &target.package, &target.toolchain)?;
             let g = graph::build(&discovery);
             if !g.errors.is_empty() {
-                graph::print_graph(&discovery, &g);
+                graph::print_graph(&discovery, &g, false);
                 std::process::exit(1);
             }
             let code = run::run(&discovery, &g, nextest)?;

@@ -255,9 +255,10 @@ match between nextest's list and run passes.
 ### Inspect without running
 
 ```console
-$ testrs discover my-tests   # list discovered fixtures/tests + resolved signatures
-$ testrs graph    my-tests   # build & validate the dependency graph, print it
-$ testrs generate my-tests   # print the generated harness source (for debugging)
+$ testrs discover my-tests          # list discovered fixtures/tests + resolved signatures
+$ testrs graph    my-tests          # build & validate the dependency graph (test → fixtures)
+$ testrs graph    my-tests --invert # invert it (fixture → what depends on it)
+$ testrs generate my-tests          # print the generated harness source (for debugging)
 ```
 
 ---
@@ -329,7 +330,7 @@ The case type `T` must be `Sync + 'static`.
 testrs <command> <PACKAGE> [--manifest-path <PATH>] [--toolchain <NAME>]
 
   discover   List fixtures/tests with resolved signatures.
-  graph      Build & validate the fixture dependency graph.
+  graph      Build & validate the fixture dependency graph.   [--invert]
   generate   Print the generated harness source (stdout).
   test       Generate and run the suite.   [--nextest]
 ```

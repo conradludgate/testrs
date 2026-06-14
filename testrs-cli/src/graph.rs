@@ -248,20 +248,29 @@ fn topo_sort_fixtures(discovery: &Discovery, nodes: &[Node]) -> (Vec<usize>, Opt
     (order, None)
 }
 
-pub fn print_graph(discovery: &Discovery, graph: &Graph) {
-    println!("dependency graph for {}", discovery.crate_name);
+pub fn print_graph(discovery: &Discovery, graph: &Graph, invert: bool) {
+    let suffix = if invert {
+        " (inverted: fixture → dependents)"
+    } else {
+        ""
+    };
+    println!("dependency graph for {}{suffix}", discovery.crate_name);
 
-    // Each test is the root of its transitive fixture-dependency tree.
-    for node in &graph.nodes {
-        if discovery.items[node.item].kind != MarkerKind::Test {
-            continue;
+    if invert {
+        print_inverse_trees(discovery, graph);
+    } else {
+        // Each test is the root of its transitive fixture-dependency tree.
+        for node in &graph.nodes {
+            if discovery.items[node.item].kind != MarkerKind::Test {
+                continue;
+            }
+            let mut tree = Tree::new(format!("[test] {}", node_label(discovery, node.item)));
+            let mut path = HashSet::from([node.item]);
+            for edge in &node.edges {
+                tree.push(edge_tree(discovery, graph, edge, &mut path));
+            }
+            print!("\n{tree}");
         }
-        let mut tree = Tree::new(format!("[test] {}", node_label(discovery, node.item)));
-        let mut path = HashSet::from([node.item]);
-        for edge in &node.edges {
-            tree.push(edge_tree(discovery, graph, edge, &mut path));
-        }
-        print!("\n{tree}");
     }
 
     if !graph.fixture_order.is_empty() {
@@ -317,6 +326,64 @@ fn edge_tree(
     }
     path.remove(&edge.target);
     tree
+}
+
+/// Inverse view: each base fixture (one with no dependencies of its own) is a
+/// root, and its descendants are the things that depend on it, up to the tests.
+fn print_inverse_trees(discovery: &Discovery, graph: &Graph) {
+    // For each fixture, the consumers that depend on it (and how).
+    let mut dependents: HashMap<usize, Vec<(usize, &Edge)>> = HashMap::new();
+    for node in &graph.nodes {
+        for edge in &node.edges {
+            dependents
+                .entry(edge.target)
+                .or_default()
+                .push((node.item, edge));
+        }
+    }
+
+    for node in &graph.nodes {
+        if discovery.items[node.item].kind != MarkerKind::Fixture || !node.edges.is_empty() {
+            continue;
+        }
+        let mut tree = Tree::new(format!("[fixture] {}", node_label(discovery, node.item)));
+        let mut path = HashSet::from([node.item]);
+        push_dependents(&mut tree, discovery, &dependents, node.item, &mut path);
+        print!("\n{tree}");
+    }
+}
+
+/// Attach, for each consumer that depends on `idx`, a child subtree (recursing
+/// into that consumer's own dependents). A cycle is shown as a leaf.
+fn push_dependents(
+    tree: &mut Tree<String>,
+    discovery: &Discovery,
+    dependents: &HashMap<usize, Vec<(usize, &Edge)>>,
+    idx: usize,
+    path: &mut HashSet<usize>,
+) {
+    let Some(consumers) = dependents.get(&idx) else {
+        return;
+    };
+    for &(consumer, edge) in consumers {
+        let prefix = match edge.ownership {
+            Ownership::Borrowed => "&",
+            Ownership::Owned => "",
+        };
+        let label = format!(
+            "{prefix}{} ← {}",
+            edge.param,
+            node_label(discovery, consumer)
+        );
+        if !path.insert(consumer) {
+            tree.push(Tree::new(format!("{label} (cycle)")));
+            continue;
+        }
+        let mut child = Tree::new(label);
+        push_dependents(&mut child, discovery, dependents, consumer, path);
+        path.remove(&consumer);
+        tree.push(child);
+    }
 }
 
 fn print_error(err: &GraphError) {
