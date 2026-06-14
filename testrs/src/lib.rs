@@ -8,3 +8,18 @@
 //! dependency graph and generate a [`kitest`](https://docs.rs/kitest) harness.
 
 pub use testrs_macros::{fixture, test};
+
+/// Provides a human-readable name for a test case value.
+///
+/// Implement this on a `#[test(cases(...))]` provider's element type to control
+/// how its cases appear in test output. testrs prefers this over `Debug` /
+/// `Display`; if none are implemented it falls back to the case index.
+///
+/// ```ignore
+/// impl testrs::TestCaseName for Vector {
+///     fn case_name(&self) -> String { self.id.clone() }
+/// }
+/// ```
+pub trait TestCaseName {
+    fn case_name(&self) -> String;
+}

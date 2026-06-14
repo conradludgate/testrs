@@ -7,7 +7,7 @@ use std::process::Command;
 use anyhow::{Context, Result};
 
 use crate::codegen;
-use crate::discover::Discovery;
+use crate::discover::{CaseNameStrategy, Discovery};
 use crate::graph::Graph;
 
 /// Generate the harness crate and run it, returning its process exit code.
@@ -22,6 +22,16 @@ pub fn run(discovery: &Discovery, graph: &Graph) -> Result<i32> {
         .join(&discovery.crate_name);
     let src_dir = crate_dir.join("src");
     std::fs::create_dir_all(&src_dir).with_context(|| format!("creating {}", src_dir.display()))?;
+
+    // `testrs` is only needed when a case uses the `TestCaseName` trait.
+    let uses_testrs = discovery
+        .items
+        .iter()
+        .any(|i| i.cases.iter().any(|c| c.name_strategy == CaseNameStrategy::TestCaseName));
+    let testrs_dep = match (uses_testrs, &discovery.testrs_manifest_dir) {
+        (true, Some(dir)) => format!("testrs = {{ path = {dir:?} }}\n"),
+        _ => String::new(),
+    };
 
     // A standalone `[workspace]` keeps the parent workspace from adopting this
     // crate; the analyzed crate is brought in as a path dependency.
@@ -38,7 +48,8 @@ pub fn run(discovery: &Discovery, graph: &Graph) -> Result<i32> {
          [dependencies]\n\
          {package} = {{ path = {manifest_dir:?} }}\n\
          kitest = \"0.5\"\n\
-         tokio = {{ version = \"1\", features = [\"rt-multi-thread\"] }}\n",
+         tokio = {{ version = \"1\", features = [\"rt-multi-thread\"] }}\n\
+         {testrs_dep}",
         name = discovery.crate_name,
         package = discovery.package_name,
         manifest_dir = discovery.manifest_dir,

@@ -16,7 +16,7 @@ use std::fmt::Write;
 use anyhow::{Result, bail};
 use rustdoc_ir::Type;
 
-use crate::discover::{Discovery, MarkerKind};
+use crate::discover::{CaseNameStrategy, Discovery, MarkerKind};
 use crate::graph::{Graph, Node, Ownership};
 
 /// Render a `rustdoc_ir::Type` as Rust source. Paths already carry the crate
@@ -130,8 +130,24 @@ fn emit_test(
         let mut fmt = name.clone();
         let mut fmt_args = Vec::new();
         for case in &item.cases {
-            fmt.push_str(&format!("[{}{{}}]", case.param));
-            fmt_args.push(format!("{}_i", case.param));
+            match case.name_strategy {
+                CaseNameStrategy::Index => {
+                    fmt.push_str(&format!("[{}{{}}]", case.param));
+                    fmt_args.push(format!("{}_i", case.param));
+                }
+                CaseNameStrategy::Debug => {
+                    fmt.push_str("[{:?}]");
+                    fmt_args.push(case.param.clone());
+                }
+                CaseNameStrategy::Display => {
+                    fmt.push_str("[{}]");
+                    fmt_args.push(case.param.clone());
+                }
+                CaseNameStrategy::TestCaseName => {
+                    fmt.push_str("[{}]");
+                    fmt_args.push(format!("testrs::TestCaseName::case_name({})", case.param));
+                }
+            }
         }
         format!("format!({fmt:?}, {}).into()", fmt_args.join(", "))
     };

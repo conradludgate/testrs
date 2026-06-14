@@ -49,6 +49,19 @@ pub struct Signature {
     pub is_async: bool,
 }
 
+/// How a case's value is rendered into its test name.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CaseNameStrategy {
+    /// `testrs::TestCaseName::case_name(&value)`.
+    TestCaseName,
+    /// `{value:?}`.
+    Debug,
+    /// `{value}`.
+    Display,
+    /// `<param><index>`.
+    Index,
+}
+
 /// A test parameter driven by a `#[test(cases(<param> = <provider>))]` binding.
 /// The test runs once per element of the cartesian product of all its cases.
 pub struct CaseParam {
@@ -58,6 +71,8 @@ pub struct CaseParam {
     pub provider_call: String,
     /// Element type produced by the provider (the `T` in `Vec<T>`).
     pub element: Type,
+    /// How to name each case of this parameter.
+    pub name_strategy: CaseNameStrategy,
 }
 
 /// A discovered fixture or test, with its module-tree position and signature.
@@ -82,6 +97,9 @@ pub struct Discovery {
     pub manifest_dir: PathBuf,
     /// The workspace target directory (where the ephemeral harness crate lives).
     pub target_dir: PathBuf,
+    /// Directory of the `testrs` crate, if the target depends on it — used to
+    /// give the harness access to `testrs::TestCaseName`.
+    pub testrs_manifest_dir: Option<PathBuf>,
     pub items: Vec<Discovered>,
 }
 
@@ -196,6 +214,13 @@ pub fn discover(manifest_path: &Path, package: &str, toolchain: &str) -> Result<
         .target_directory()
         .as_std_path()
         .to_path_buf();
+    let testrs_manifest_dir = graph.packages().find(|p| p.name() == "testrs").map(|p| {
+        p.manifest_path()
+            .parent()
+            .expect("manifest path has a parent")
+            .as_std_path()
+            .to_path_buf()
+    });
 
     let cache_dir = std::env::temp_dir().join("testrs-rustdoc-cache");
     std::fs::create_dir_all(&cache_dir)?;
@@ -293,6 +318,45 @@ pub fn discover(manifest_path: &Path, package: &str, toolchain: &str) -> Result<
             )
             .map_err(|e| anyhow!("resolving case element type of `{pname}`: {e:?}"))?;
 
+            // Pick the naming strategy from the traits the element implements.
+            // Primitives always have Debug; for a local struct/enum we scan its
+            // rustdoc impls. Hierarchy: TestCaseName > Debug > Display > index.
+            let name_strategy = match raw_element {
+                rustdoc_types::Type::Primitive(_) => CaseNameStrategy::Debug,
+                rustdoc_types::Type::ResolvedPath(p) => {
+                    let impls: &[Id] = index
+                        .get(&p.id)
+                        .map(|it| match &it.inner {
+                            ItemEnum::Struct(s) => s.impls.as_slice(),
+                            ItemEnum::Enum(e) => e.impls.as_slice(),
+                            _ => &[][..],
+                        })
+                        .unwrap_or(&[]);
+                    let (mut testcasename, mut debug, mut display) = (false, false, false);
+                    for impl_id in impls {
+                        let Some(ItemEnum::Impl(im)) = index.get(impl_id).map(|it| &it.inner) else {
+                            continue;
+                        };
+                        match im.trait_.as_ref().and_then(|t| t.path.rsplit("::").next()) {
+                            Some("TestCaseName") => testcasename = true,
+                            Some("Debug") => debug = true,
+                            Some("Display") => display = true,
+                            _ => {}
+                        }
+                    }
+                    if testcasename {
+                        CaseNameStrategy::TestCaseName
+                    } else if debug {
+                        CaseNameStrategy::Debug
+                    } else if display {
+                        CaseNameStrategy::Display
+                    } else {
+                        CaseNameStrategy::Index
+                    }
+                }
+                _ => CaseNameStrategy::Index,
+            };
+
             let mut segments = vec![crate_name.clone()];
             segments.extend(pmod);
             segments.push(pname);
@@ -300,6 +364,7 @@ pub fn discover(manifest_path: &Path, package: &str, toolchain: &str) -> Result<
                 param,
                 provider_call: segments.join("::"),
                 element,
+                name_strategy,
             });
         }
 
@@ -327,6 +392,7 @@ pub fn discover(manifest_path: &Path, package: &str, toolchain: &str) -> Result<
         package_name,
         manifest_dir,
         target_dir,
+        testrs_manifest_dir,
         items,
     })
 }
