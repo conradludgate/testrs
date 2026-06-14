@@ -103,7 +103,13 @@ fn emit_test(
     key: &str,
 ) -> Result<()> {
     let item = &discovery.items[ti];
-    let name = &item.name;
+    // Qualify the test name with its module path (nextest's `::` convention) so
+    // the group is visible in the output: `users::test_find_user`.
+    let name = if item.module_path.is_empty() {
+        item.name.clone()
+    } else {
+        format!("{}::{}", item.module_path.join("::"), item.name)
+    };
 
     // Leak each provider's collection so `&T` cases live for the whole run, then
     // open one loop per provider — their product yields the test instances.
