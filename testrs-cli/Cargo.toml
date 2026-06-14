@@ -21,6 +21,9 @@ rustdoc-types = "=0.57.3"
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }
 syn = { version = "2", features = ["full"] }
+quote = "1"
+proc-macro2 = "1"
+prettyplease = "0.2"
 termtree = "0.5"
 
 [lints]
