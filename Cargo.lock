@@ -43,6 +43,13 @@ name = "testrs-cli"
 version = "0.1.0"
 
 [[package]]
+name = "testrs-example"
+version = "0.1.0"
+dependencies = [
+ "testrs",
+]
+
+[[package]]
 name = "testrs-macros"
 version = "0.1.0"
 dependencies = [

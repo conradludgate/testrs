@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["testrs", "testrs-macros", "testrs-cli"]
+members = ["testrs", "testrs-macros", "testrs-cli", "testrs-example"]
 
 [workspace.package]
 version = "0.1.0"
