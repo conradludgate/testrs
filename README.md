@@ -127,27 +127,30 @@ testrs-example/Cargo.toml`.)
 
 ### Share a fixture across many tests
 
-A fixture is scoped to the module it's defined in and shared by everything below
-it. Put suite-wide fixtures at the crate root and group-specific ones in
-submodules:
+Define a fixture where you want it shared — every test in that module (and its
+submodules) borrows the same instance. A fixture at the crate root is shared by
+the whole suite:
 
 ```rust
 #[fixture]
-fn config() -> Config { /* ... */ }            // crate root → whole suite
+async fn database() -> Database {
+    Database::connect().await        // built once, not once per test
+}
 
 pub mod users {
-    use super::{Config, Database};
+    use super::Database;
     use testrs::test;
 
     #[test]
-    async fn a(db: &Database) { /* ... */ }     // both tests in `users`
+    async fn lists(db: &Database) { assert!(db.users().await.is_empty()); }
+
     #[test]
-    async fn b(db: &Database) { /* ... */ }     // share one `database`
+    async fn counts(db: &Database) { assert_eq!(db.count().await, 0); }
 }
 ```
 
-A shared fixture is built **once** and reused; it's torn down when the runner
-leaves its scope.
+`database` is built **once** before the `users` group runs and dropped after both
+tests finish. Move it inside `users` to share it only with that module's tests.
 
 ### Make a fresh value per test
 
