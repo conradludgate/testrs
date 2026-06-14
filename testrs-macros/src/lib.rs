@@ -18,13 +18,26 @@
 use proc_macro::TokenStream;
 use proc_macro2::{Ident, Span, TokenStream as TokenStream2};
 use quote::quote;
+use syn::{ItemFn, Visibility, parse_quote};
 
-/// Emit the annotated function unchanged, prefixed with a
+/// Emit the annotated function, prefixed with a
 /// `#[diagnostic::testrs::<kind>(<args>)]` marker carrying the macro's arguments.
+///
+/// The generated kitest harness lives in a separate target, so it can only call
+/// fixtures/tests through the crate's public path. We therefore promote a
+/// plain (private) marked function to `pub`; functions with an explicit
+/// visibility are left as written.
 fn mark(kind: &str, attr: TokenStream, item: TokenStream) -> TokenStream {
     let kind = Ident::new(kind, Span::call_site());
     let args = TokenStream2::from(attr);
-    let item = TokenStream2::from(item);
+
+    let mut func: ItemFn = match syn::parse(item) {
+        Ok(func) => func,
+        Err(err) => return err.to_compile_error().into(),
+    };
+    if matches!(func.vis, Visibility::Inherited) {
+        func.vis = parse_quote!(pub);
+    }
 
     let marker = if args.is_empty() {
         quote! { #[diagnostic::testrs::#kind] }
@@ -38,7 +51,7 @@ fn mark(kind: &str, attr: TokenStream, item: TokenStream) -> TokenStream {
     quote! {
         #[allow(dead_code)]
         #marker
-        #item
+        #func
     }
     .into()
 }
