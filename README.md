@@ -129,12 +129,13 @@ testrs-example/Cargo.toml`.)
 
 Define a fixture where you want it shared — every test in that module (and its
 submodules) borrows the same instance. A fixture at the crate root is shared by
-the whole suite:
+the whole suite. Log from its body to see it's built only once:
 
 ```rust
 #[fixture]
-async fn database() -> Database {
-    Database::connect().await        // built once, not once per test
+fn database() -> Database {
+    eprintln!("connecting to the database");   // expensive — do it once
+    Database
 }
 
 pub mod users {
@@ -142,15 +143,28 @@ pub mod users {
     use testrs::test;
 
     #[test]
-    async fn lists(db: &Database) { assert!(db.users().await.is_empty()); }
-
+    fn lists(db: &Database) { /* ... */ }
     #[test]
-    async fn counts(db: &Database) { assert_eq!(db.count().await, 0); }
+    fn counts(db: &Database) { /* ... */ }
 }
 ```
 
-`database` is built **once** before the `users` group runs and dropped after both
-tests finish. Move it inside `users` to share it only with that module's tests.
+Both tests borrow the same `Database`, so the setup line prints once:
+
+```console
+$ testrs test my-tests
+connecting to the database
+
+group users, running 2 tests
+test users::counts ... ok
+test users::lists ... ok
+
+test result: ok. 2 passed; 0 failed; ...
+```
+
+The fixture is built **once** before the `users` group runs and dropped after
+both tests finish. Move it inside `users` to share it only with that module's
+tests.
 
 ### Make a fresh value per test
 
