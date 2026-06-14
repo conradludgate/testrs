@@ -61,3 +61,44 @@ pub mod posts {
         let _ = db;
     }
 }
+
+/// Data-driven tests: one test per parsed vector (like crypto test vectors).
+pub mod vectors {
+    use testrs::test;
+
+    pub struct Doubling {
+        pub input: u32,
+        pub doubled: u32,
+    }
+
+    /// Parsed at collection time (here inline; in practice from a file).
+    pub fn doublings() -> Vec<Doubling> {
+        vec![
+            Doubling { input: 2, doubled: 4 },
+            Doubling { input: 3, doubled: 6 },
+            Doubling { input: 5, doubled: 10 },
+        ]
+    }
+
+    #[test(cases(case = doublings))]
+    fn test_doubling(case: &Doubling) {
+        assert_eq!(case.input * 2, case.doubled);
+    }
+}
+
+/// Product cases: the test runs over `lefts` × `rights`.
+pub mod product {
+    use testrs::test;
+
+    pub fn lefts() -> Vec<u32> {
+        vec![1, 2]
+    }
+    pub fn rights() -> Vec<u32> {
+        vec![10, 20]
+    }
+
+    #[test(cases(l = lefts, r = rights))]
+    fn test_sum(l: &u32, r: &u32) {
+        assert_eq!(l + r, r + l);
+    }
+}
