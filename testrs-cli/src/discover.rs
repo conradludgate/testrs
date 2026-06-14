@@ -113,14 +113,14 @@ pub struct Discovery {
     pub items: Vec<Discovered>,
 }
 
+/// A parsed marker: kind, `cases` bindings (param → provider path), panic expectation.
+type ParsedMarker = (MarkerKind, Vec<(String, syn::Path)>, ShouldPanic);
+
 /// The testrs marker on an item: its kind, plus any `cases(param = provider)`
 /// bindings (only meaningful on tests).
 ///
 /// Markers ride in the `diagnostic::testrs::<kind>` namespace, which rustdoc
 /// preserves verbatim in `Attribute::Other`.
-/// A parsed marker: kind, `cases` bindings (param → provider path), panic expectation.
-type ParsedMarker = (MarkerKind, Vec<(String, syn::Path)>, ShouldPanic);
-
 fn parse_marker(attrs: &[Attribute]) -> Option<ParsedMarker> {
     use syn::punctuated::Punctuated;
     use syn::{Expr, ExprLit, Lit, Meta, Token};
