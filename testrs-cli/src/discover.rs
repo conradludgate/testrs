@@ -11,12 +11,12 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, anyhow, bail};
 use guppy::MetadataCommand;
+use rustdoc_ir::Type;
 use rustdoc_processor::CrateCollection;
 use rustdoc_processor::cache::RustdocGlobalFsCache;
 use rustdoc_processor::compute::NoProgress;
 use rustdoc_processor::crate_data::CrateItemIndex;
 use rustdoc_processor::indexing::NoAnnotations;
-use rustdoc_ir::Type;
 use rustdoc_resolver::{GenericBindings, TypeAliasResolution, resolve_free_function, resolve_type};
 use rustdoc_types::{Attribute, Id, ItemEnum};
 use syn::parse::Parser;
@@ -118,12 +118,16 @@ pub struct Discovery {
 ///
 /// Markers ride in the `diagnostic::testrs::<kind>` namespace, which rustdoc
 /// preserves verbatim in `Attribute::Other`.
-fn parse_marker(attrs: &[Attribute]) -> Option<(MarkerKind, Vec<(String, syn::Path)>, ShouldPanic)> {
+fn parse_marker(
+    attrs: &[Attribute],
+) -> Option<(MarkerKind, Vec<(String, syn::Path)>, ShouldPanic)> {
     use syn::punctuated::Punctuated;
     use syn::{Expr, ExprLit, Lit, Meta, Token};
 
     for attr in attrs {
-        let Attribute::Other(raw) = attr else { continue };
+        let Attribute::Other(raw) = attr else {
+            continue;
+        };
         let Ok(parsed) = syn::Attribute::parse_outer.parse_str(raw) else {
             continue;
         };
@@ -165,7 +169,10 @@ fn parse_marker(attrs: &[Attribute]) -> Option<(MarkerKind, Vec<(String, syn::Pa
                                 should_panic = ShouldPanic::Any;
                             }
                             Meta::NameValue(nv) if nv.path.is_ident("should_panic") => {
-                                if let Expr::Lit(ExprLit { lit: Lit::Str(s), .. }) = &nv.value {
+                                if let Expr::Lit(ExprLit {
+                                    lit: Lit::Str(s), ..
+                                }) = &nv.value
+                                {
                                     should_panic = ShouldPanic::With(s.value());
                                 }
                             }
@@ -303,8 +310,13 @@ pub fn discover(manifest_path: &Path, package: &str, toolchain: &str) -> Result<
         };
         let name = item.name.clone().unwrap_or_default();
         let test_module = module_path.get(id).cloned().unwrap_or_default();
-        let func = resolve_free_function(item, krate, &collection, TypeAliasResolution::ResolveThrough)
-            .map_err(|e| anyhow!("resolving `{name}`: {e:?}"))?;
+        let func = resolve_free_function(
+            item,
+            krate,
+            &collection,
+            TypeAliasResolution::ResolveThrough,
+        )
+        .map_err(|e| anyhow!("resolving `{name}`: {e:?}"))?;
 
         let mut cases = Vec::new();
         for (param, provider_path) in raw_cases {
@@ -355,7 +367,8 @@ pub fn discover(manifest_path: &Path, package: &str, toolchain: &str) -> Result<
                         .unwrap_or(&[]);
                     let (mut testcasename, mut debug, mut display) = (false, false, false);
                     for impl_id in impls {
-                        let Some(ItemEnum::Impl(im)) = index.get(impl_id).map(|it| &it.inner) else {
+                        let Some(ItemEnum::Impl(im)) = index.get(impl_id).map(|it| &it.inner)
+                        else {
                             continue;
                         };
                         match im.trait_.as_ref().and_then(|t| t.path.rsplit("::").next()) {

@@ -66,7 +66,8 @@ pub fn run(discovery: &Discovery, graph: &Graph, nextest: bool) -> Result<i32> {
     let manifest_path = crate_dir.join("Cargo.toml");
     let mut cmd = Command::new("cargo");
     if nextest {
-        cmd.args(["nextest", "run", "--manifest-path"]).arg(&manifest_path);
+        cmd.args(["nextest", "run", "--manifest-path"])
+            .arg(&manifest_path);
     } else {
         cmd.args(["test", "--manifest-path"])
             .arg(&manifest_path)

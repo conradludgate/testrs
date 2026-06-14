@@ -81,9 +81,18 @@ pub mod vectors {
     /// Parsed at collection time (here inline; in practice from a file).
     pub fn doublings() -> Vec<Doubling> {
         vec![
-            Doubling { input: 2, doubled: 4 },
-            Doubling { input: 3, doubled: 6 },
-            Doubling { input: 5, doubled: 10 },
+            Doubling {
+                input: 2,
+                doubled: 4,
+            },
+            Doubling {
+                input: 3,
+                doubled: 6,
+            },
+            Doubling {
+                input: 5,
+                doubled: 10,
+            },
         ]
     }
 

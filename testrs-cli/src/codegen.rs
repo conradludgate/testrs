@@ -291,7 +291,10 @@ pub fn generate(discovery: &Discovery, graph: &Graph) -> Result<String> {
     writeln!(out, "use std::cell::RefCell;")?;
     writeln!(out, "use std::ops::ControlFlow;")?;
     writeln!(out)?;
-    writeln!(out, "use kitest::group::{{TestGroupOutcomes, TestGroupRunner}};")?;
+    writeln!(
+        out,
+        "use kitest::group::{{TestGroupOutcomes, TestGroupRunner}};"
+    )?;
     writeln!(out, "use kitest::prelude::*;")?;
     writeln!(out, "use kitest::runner::SimpleRunner;")?;
     writeln!(out, "use tokio::runtime::Handle;")?;
@@ -306,11 +309,17 @@ pub fn generate(discovery: &Discovery, graph: &Graph) -> Result<String> {
     }
     writeln!(out, "}}")?;
     writeln!(out, "thread_local! {{")?;
-    writeln!(out, "    static FIXTURES: RefCell<Fixtures> = RefCell::new(Fixtures::default());")?;
+    writeln!(
+        out,
+        "    static FIXTURES: RefCell<Fixtures> = RefCell::new(Fixtures::default());"
+    )?;
     writeln!(out, "}}")?;
     writeln!(out)?;
 
-    writeln!(out, "struct FixtureRunner {{ handle: Handle, active: RefCell<Vec<&'static str>> }}")?;
+    writeln!(
+        out,
+        "struct FixtureRunner {{ handle: Handle, active: RefCell<Vec<&'static str>> }}"
+    )?;
     writeln!(out)?;
 
     // `ensure_<fixture>` builds a shared fixture (once), after its borrowed deps.
@@ -324,20 +333,34 @@ pub fn generate(discovery: &Discovery, graph: &Graph) -> Result<String> {
             }
         }
         writeln!(out, "    fn ensure_{name}(&self) {{")?;
-        writeln!(out, "        if FIXTURES.with(|c| c.borrow().{name}.is_some()) {{ return; }}")?;
+        writeln!(
+            out,
+            "        if FIXTURES.with(|c| c.borrow().{name}.is_some()) {{ return; }}"
+        )?;
         for edge in &node.edges {
             writeln!(out, "        self.ensure_{}();", field(edge.target))?;
         }
         if node.edges.is_empty() {
-            writeln!(out, "        let value = {};", call_expr(discovery, fi, &[], "self.handle"))?;
+            writeln!(
+                out,
+                "        let value = {};",
+                call_expr(discovery, fi, &[], "self.handle")
+            )?;
         } else {
             let args = call_args(discovery, node, &Default::default());
             writeln!(out, "        let value = FIXTURES.with(|c| {{")?;
             writeln!(out, "            let c = c.borrow();")?;
-            writeln!(out, "            {}", call_expr(discovery, fi, &args, "self.handle"))?;
+            writeln!(
+                out,
+                "            {}",
+                call_expr(discovery, fi, &args, "self.handle")
+            )?;
             writeln!(out, "        }});")?;
         }
-        writeln!(out, "        FIXTURES.with(|c| c.borrow_mut().{name} = Some(value));")?;
+        writeln!(
+            out,
+            "        FIXTURES.with(|c| c.borrow_mut().{name} = Some(value));"
+        )?;
         writeln!(out, "    }}")?;
     }
     // `ensure` for a group: build every shared fixture it needs.
@@ -381,7 +404,10 @@ pub fn generate(discovery: &Discovery, graph: &Graph) -> Result<String> {
     writeln!(out)?;
 
     writeln!(out, "fn common_prefix(a: &[&str], b: &[&str]) -> usize {{")?;
-    writeln!(out, "    a.iter().zip(b).take_while(|(x, y)| x == y).count()")?;
+    writeln!(
+        out,
+        "    a.iter().zip(b).take_while(|(x, y)| x == y).count()"
+    )?;
     writeln!(out, "}}")?;
     writeln!(out)?;
 
@@ -391,23 +417,46 @@ pub fn generate(discovery: &Discovery, graph: &Graph) -> Result<String> {
         out,
         "impl<'t> TestGroupRunner<'t, &'static str, &'static str, ()> for FixtureRunner {{"
     )?;
-    writeln!(out, "    fn run_group<F>(&self, f: F, key: &&'static str, _ctx: Option<&()>)")?;
-    writeln!(out, "        -> ControlFlow<TestGroupOutcomes<'t>, TestGroupOutcomes<'t>>")?;
+    writeln!(
+        out,
+        "    fn run_group<F>(&self, f: F, key: &&'static str, _ctx: Option<&()>)"
+    )?;
+    writeln!(
+        out,
+        "        -> ControlFlow<TestGroupOutcomes<'t>, TestGroupOutcomes<'t>>"
+    )?;
     writeln!(out, "    where F: FnOnce() -> TestGroupOutcomes<'t> {{")?;
     writeln!(out, "        let target: &[&'static str] = match *key {{")?;
     for (module_path, _tests, _shared_needed) in &group_shared {
         let chain = ancestor_scopes(discovery, &store_fixtures, module_path);
         let rendered: Vec<String> = chain.iter().map(|s| format!("{s:?}")).collect();
-        writeln!(out, "            {:?} => &[{}],", scope_key(module_path), rendered.join(", "))?;
+        writeln!(
+            out,
+            "            {:?} => &[{}],",
+            scope_key(module_path),
+            rendered.join(", ")
+        )?;
     }
     writeln!(out, "            _ => &[],")?;
     writeln!(out, "        }};")?;
     writeln!(out, "        {{")?;
-    writeln!(out, "            let mut active = self.active.borrow_mut();")?;
-    writeln!(out, "            let common = common_prefix(&active, target);")?;
-    writeln!(out, "            for scope in active[common..].iter().rev() {{ teardown_scope(scope); }}")?;
+    writeln!(
+        out,
+        "            let mut active = self.active.borrow_mut();"
+    )?;
+    writeln!(
+        out,
+        "            let common = common_prefix(&active, target);"
+    )?;
+    writeln!(
+        out,
+        "            for scope in active[common..].iter().rev() {{ teardown_scope(scope); }}"
+    )?;
     writeln!(out, "            active.truncate(common);")?;
-    writeln!(out, "            active.extend_from_slice(&target[common..]);")?;
+    writeln!(
+        out,
+        "            active.extend_from_slice(&target[common..]);"
+    )?;
     writeln!(out, "        }}")?;
     writeln!(out, "        self.ensure(*key);")?;
     writeln!(out, "        ControlFlow::Continue(f())")?;
@@ -416,7 +465,10 @@ pub fn generate(discovery: &Discovery, graph: &Graph) -> Result<String> {
     writeln!(out)?;
 
     // The test list (imperative so data-driven tests can push N cases).
-    writeln!(out, "fn tests(handle: Handle) -> Vec<Test<&'static str>> {{")?;
+    writeln!(
+        out,
+        "fn tests(handle: Handle) -> Vec<Test<&'static str>> {{"
+    )?;
     writeln!(out, "    let mut tests = Vec::new();")?;
     for (module_path, tests, _shared) in &group_shared {
         let key = scope_key(module_path);
@@ -438,7 +490,10 @@ pub fn generate(discovery: &Discovery, graph: &Graph) -> Result<String> {
     writeln!(out, "    if args.list {{")?;
     writeln!(out, "        if !args.ignored {{")?;
     writeln!(out, "            for t in &all {{")?;
-    writeln!(out, "                println!(\"{{}}: test\", t.meta.name);")?;
+    writeln!(
+        out,
+        "                println!(\"{{}}: test\", t.meta.name);"
+    )?;
     writeln!(out, "            }}")?;
     writeln!(out, "        }}")?;
     writeln!(out, "        return std::process::ExitCode::SUCCESS;")?;
@@ -450,7 +505,10 @@ pub fn generate(discovery: &Discovery, graph: &Graph) -> Result<String> {
         "    let selected: Vec<_> = all.into_iter().filter(|t| args.matches(&t.meta.name)).collect();"
     )?;
     writeln!(out, "    kitest::harness(&selected)")?;
-    writeln!(out, "        .with_grouper(|m: &TestMeta<&'static str>| m.extra)")?;
+    writeln!(
+        out,
+        "        .with_grouper(|m: &TestMeta<&'static str>| m.extra)"
+    )?;
     // Visit groups in module-path order so a scope's descendants are contiguous
     // and ancestor fixtures are reused rather than rebuilt.
     writeln!(
@@ -473,7 +531,11 @@ pub fn generate(discovery: &Discovery, graph: &Graph) -> Result<String> {
 /// group's module. These stay active for the group regardless of whether it uses
 /// them, so a common ancestor scope isn't torn down by a sibling that happens not
 /// to need it (fixtures within are still built lazily by `ensure`).
-fn ancestor_scopes(discovery: &Discovery, store_fixtures: &[usize], group_module: &[String]) -> Vec<String> {
+fn ancestor_scopes(
+    discovery: &Discovery,
+    store_fixtures: &[usize],
+    group_module: &[String],
+) -> Vec<String> {
     let mut by_depth: Vec<(usize, String)> = store_fixtures
         .iter()
         .map(|&i| &discovery.items[i].module_path)
@@ -495,7 +557,14 @@ fn emit_owned(
     let mut stmts = Vec::new();
     let mut locals = std::collections::HashMap::new();
     let mut building = HashSet::new();
-    build_owned(discovery, graph, consumer, &mut stmts, &mut locals, &mut building)?;
+    build_owned(
+        discovery,
+        graph,
+        consumer,
+        &mut stmts,
+        &mut locals,
+        &mut building,
+    )?;
     Ok((stmts, locals))
 }
 
@@ -518,7 +587,10 @@ fn build_owned(
         build_owned(discovery, graph, target, stmts, locals, building)?;
         let args = call_args(discovery, &graph.nodes[target], locals);
         let local = discovery.items[target].name.clone();
-        stmts.push(format!("let {local} = {};", call_expr(discovery, target, &args, "handle")));
+        stmts.push(format!(
+            "let {local} = {};",
+            call_expr(discovery, target, &args, "handle")
+        ));
         locals.insert(target, local);
     }
     Ok(())

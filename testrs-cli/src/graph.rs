@@ -158,10 +158,7 @@ pub fn build(discovery: &Discovery) -> Graph {
                 target,
             });
         }
-        nodes.push(Node {
-            item: ci,
-            edges,
-        });
+        nodes.push(Node { item: ci, edges });
     }
 
     let (fixture_order, cycle) = topo_sort_fixtures(discovery, &nodes);
@@ -232,7 +229,8 @@ fn topo_sort_fixtures(discovery: &Discovery, nodes: &[Node]) -> (Vec<usize>, Opt
                     Mark::InProgress => {
                         // Found a back-edge: reconstruct the cycle from the path.
                         let start_idx = stack.iter().position(|&(n, _)| n == dep).unwrap();
-                        let mut cycle: Vec<usize> = stack[start_idx..].iter().map(|&(n, _)| n).collect();
+                        let mut cycle: Vec<usize> =
+                            stack[start_idx..].iter().map(|&(n, _)| n).collect();
                         cycle.push(dep);
                         return (order, Some(cycle));
                     }
@@ -287,18 +285,33 @@ pub fn print_graph(discovery: &Discovery, graph: &Graph) {
 
 fn print_error(err: &GraphError) {
     match err {
-        GraphError::Missing { consumer, param, ty } => {
+        GraphError::Missing {
+            consumer,
+            param,
+            ty,
+        } => {
             println!("  error: no fixture in scope produces `{ty:?}`");
             println!("    needed by `{param}` in {consumer}");
         }
-        GraphError::Ambiguous { consumer, param, ty, candidates } => {
+        GraphError::Ambiguous {
+            consumer,
+            param,
+            ty,
+            candidates,
+        } => {
             println!("  error: multiple fixtures produce `{ty:?}` at the same scope");
             println!("    needed by `{param}` in {consumer}");
             println!("    candidates: {}", candidates.join(", "));
         }
-        GraphError::OwnsAncestor { consumer, param, fixture } => {
+        GraphError::OwnsAncestor {
+            consumer,
+            param,
+            fixture,
+        } => {
             println!("  error: `{param}` in {consumer} takes ownership of `{fixture}`,");
-            println!("    but that fixture is shared at a broader scope; borrow it with `&` instead");
+            println!(
+                "    but that fixture is shared at a broader scope; borrow it with `&` instead"
+            );
         }
         GraphError::Cycle { path } => {
             println!("  error: fixture dependency cycle: {}", path.join(" -> "));

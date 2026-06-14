@@ -9,7 +9,10 @@ use anyhow::Result;
 use clap::{Parser, Subcommand};
 
 #[derive(Parser)]
-#[command(name = "testrs", about = "Code generator for the testrs test framework")]
+#[command(
+    name = "testrs",
+    about = "Code generator for the testrs test framework"
+)]
 struct Cli {
     #[command(subcommand)]
     command: Command,
@@ -71,7 +74,8 @@ fn main() -> Result<()> {
             Ok(())
         }
         Command::Test { target, nextest } => {
-            let discovery = discover::discover(&target.manifest_path, &target.package, &target.toolchain)?;
+            let discovery =
+                discover::discover(&target.manifest_path, &target.package, &target.toolchain)?;
             let g = graph::build(&discovery);
             if !g.errors.is_empty() {
                 graph::print_graph(&discovery, &g);
