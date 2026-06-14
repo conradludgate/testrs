@@ -124,31 +124,40 @@ fn emit_test(
         )?;
     }
 
+    // Cases render as `name{param0=value0,param1=value1}`. `{{`/`}}` are the
+    // literal braces; per dimension we emit `<param>=<placeholder>`.
     let name_expr = if item.cases.is_empty() {
         format!("{name:?}.into()")
     } else {
         let mut fmt = name.clone();
+        fmt.push_str("{{");
         let mut fmt_args = Vec::new();
-        for case in &item.cases {
+        for (i, case) in item.cases.iter().enumerate() {
+            if i > 0 {
+                fmt.push(',');
+            }
+            fmt.push_str(&case.param);
+            fmt.push('=');
             match case.name_strategy {
                 CaseNameStrategy::Index => {
-                    fmt.push_str(&format!("[{}{{}}]", case.param));
+                    fmt.push_str("{}");
                     fmt_args.push(format!("{}_i", case.param));
                 }
                 CaseNameStrategy::Debug => {
-                    fmt.push_str("[{:?}]");
+                    fmt.push_str("{:?}");
                     fmt_args.push(case.param.clone());
                 }
                 CaseNameStrategy::Display => {
-                    fmt.push_str("[{}]");
+                    fmt.push_str("{}");
                     fmt_args.push(case.param.clone());
                 }
                 CaseNameStrategy::TestCaseName => {
-                    fmt.push_str("[{}]");
+                    fmt.push_str("{}");
                     fmt_args.push(format!("testrs::TestCaseName::case_name({})", case.param));
                 }
             }
         }
+        fmt.push_str("}}");
         format!("format!({fmt:?}, {}).into()", fmt_args.join(", "))
     };
 
