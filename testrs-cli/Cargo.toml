@@ -11,3 +11,13 @@ name = "testrs"
 path = "src/main.rs"
 
 [dependencies]
+# rustdoc-reflection is git-only (not published to crates.io).
+rustdoc_ir = { git = "https://github.com/LukeMathWalker/rustdoc-reflection" }
+rustdoc_resolver = { git = "https://github.com/LukeMathWalker/rustdoc-reflection" }
+rustdoc_processor = { git = "https://github.com/LukeMathWalker/rustdoc-reflection" }
+# Pinned so PackageGraph / Item types unify with rustdoc_processor.
+guppy = "=0.17.26"
+rustdoc-types = "=0.57.3"
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+syn = { version = "2", features = ["full"] }
