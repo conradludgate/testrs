@@ -1,14 +1,15 @@
 //! Generate the kitest harness source from a resolved fixture graph.
 //!
-//! Shape (validated by hand first): one tokio runtime; `SimpleRunner`
-//! (single-threaded, in order); tests grouped by leaf module. Shared (borrowed)
-//! fixtures live in one thread-local store and are scoped by the module that
-//! defines them. The group runner keeps an *active scope stack*: entering a
-//! group sets up the shared fixtures it needs (lazily, once), and a scope's
-//! fixtures are torn down only when the runner leaves that scope — so a common
-//! ancestor scope is built once and reused across the groups beneath it. Each
-//! test closure pulls borrowed fixtures from the store, builds its owned
-//! per-test fixtures fresh, and runs the async body via `Handle::block_on`.
+//! Shape (validated by hand first): `SimpleRunner` (single-threaded, in order);
+//! tests grouped by leaf module. Shared (borrowed) fixtures live in one
+//! thread-local store and are scoped by the module that defines them. The group
+//! runner keeps an *active scope stack*: entering a group sets up the shared
+//! fixtures it needs (lazily, once), and a scope's fixtures are torn down only
+//! when the runner leaves that scope — so a common ancestor scope is built once
+//! and reused across the groups beneath it. Each test closure pulls borrowed
+//! fixtures from the store, builds its owned per-test fixtures fresh, and runs the
+//! async body through the crate's `#[runtime]` bridge (or `testrs::block_on` by
+//! default) — the harness never names a specific runtime.
 //!
 //! The harness is built as a `proc_macro2::TokenStream` with `quote!` and
 //! formatted with `prettyplease`, so there's no hand-maintained indentation.
@@ -34,6 +35,16 @@ pub fn generate(discovery: &Discovery, graph: &Graph) -> Result<String> {
     if !graph.errors.is_empty() {
         bail!("cannot generate a harness: the fixture graph has unresolved errors");
     }
+
+    // How async fixtures/tests are driven to completion: the crate's `#[runtime]`
+    // provider, or `testrs::block_on` (pollster) by default. The harness itself
+    // stays runtime-agnostic — no tokio, no `Handle` threading.
+    let block_on: TokenStream = discovery
+        .runtime_call
+        .as_deref()
+        .unwrap_or("testrs::block_on")
+        .parse()
+        .expect("valid block_on path");
 
     // A fixture is "shared" (lives in the store) if anything borrows it — `&` or
     // `&mut`. A `&mut` borrow mutates that one stored instance in place.
@@ -103,13 +114,12 @@ pub fn generate(discovery: &Discovery, graph: &Graph) -> Result<String> {
                 quote! { self.#d(); }
             })
             .collect();
-        let handle = quote! { self.handle };
         let build = if node.edges.is_empty() {
-            let call = call_tokens(discovery, fi, &[], &handle);
+            let call = call_tokens(discovery, fi, &[], &block_on);
             quote! { let value = #call; }
         } else {
             let args = fixture_args(discovery, node, &HashMap::new());
-            let call = call_tokens(discovery, fi, &args, &handle);
+            let call = call_tokens(discovery, fi, &args, &block_on);
             // A `&mut` dep needs a mutable borrow of the store; disjoint fields
             // let other `&` deps read from the same `RefMut`.
             let borrow = if node
@@ -193,7 +203,7 @@ pub fn generate(discovery: &Discovery, graph: &Graph) -> Result<String> {
     for (module_path, tests, _) in &group_shared {
         let key = scope_key(module_path);
         for &ti in tests {
-            test_blocks.push(emit_test(discovery, graph, ti, &key)?);
+            test_blocks.push(emit_test(discovery, graph, ti, &key, &block_on)?);
         }
     }
 
@@ -207,7 +217,6 @@ pub fn generate(discovery: &Discovery, graph: &Graph) -> Result<String> {
         use kitest::group::{TestGroupOutcomes, TestGroupRunner};
         use kitest::prelude::*;
         use kitest::runner::SimpleRunner;
-        use tokio::runtime::Handle;
 
         #[derive(Default)]
         struct Fixtures {
@@ -219,7 +228,6 @@ pub fn generate(discovery: &Discovery, graph: &Graph) -> Result<String> {
         }
 
         struct FixtureRunner {
-            handle: Handle,
             active: RefCell<Vec<&'static str>>,
         }
 
@@ -276,16 +284,14 @@ pub fn generate(discovery: &Discovery, graph: &Graph) -> Result<String> {
             }
         }
 
-        fn tests(handle: Handle) -> Vec<Test<&'static str>> {
+        fn tests() -> Vec<Test<&'static str>> {
             let mut tests = Vec::new();
             #(#test_blocks)*
             tests
         }
 
         fn main() -> std::process::ExitCode {
-            let rt = tokio::runtime::Runtime::new().unwrap();
-            let handle = rt.handle().clone();
-            let all = tests(handle.clone());
+            let all = tests();
             let args = testrs::TestArgs::from_env();
             if args.list {
                 if !args.ignored {
@@ -301,7 +307,6 @@ pub fn generate(discovery: &Discovery, graph: &Graph) -> Result<String> {
                 .with_grouper(|m: &TestMeta<&'static str>| m.extra)
                 .with_groups(kitest::group::TestGroupBTreeMap::new())
                 .with_group_runner(FixtureRunner {
-                    handle,
                     active: RefCell::new(Vec::new()),
                 })
                 .with_runner(SimpleRunner::default())

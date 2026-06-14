@@ -87,3 +87,12 @@ pub fn fixture(attr: TokenStream, item: TokenStream) -> TokenStream {
 pub fn test(attr: TokenStream, item: TokenStream) -> TokenStream {
     mark("test", attr, item)
 }
+
+/// Marks the function testrs uses to run async fixtures/tests to completion —
+/// the bridge to your async runtime. It must be callable as
+/// `fn(impl Future<Output = T>) -> T` (typically `fn rt<F: Future>(f: F) -> F::Output`).
+/// At most one per crate; without one, testrs falls back to `testrs::block_on`.
+#[proc_macro_attribute]
+pub fn runtime(attr: TokenStream, item: TokenStream) -> TokenStream {
+    mark("runtime", attr, item)
+}

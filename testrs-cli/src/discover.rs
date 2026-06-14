@@ -110,11 +110,20 @@ pub struct Discovery {
     /// Directory of the `testrs` crate, if the target depends on it — used to
     /// give the harness access to `testrs::TestCaseName`.
     pub testrs_manifest_dir: Option<PathBuf>,
+    /// Fully-qualified path of the `#[runtime]` async bridge, if the crate marks
+    /// one (e.g. `crate_name::module::rt`). `None` falls back to `testrs::block_on`.
+    pub runtime_call: Option<String>,
     pub items: Vec<Discovered>,
 }
 
-/// A parsed marker: kind, `cases` bindings (param → provider path), panic expectation.
-type ParsedMarker = (MarkerKind, Vec<(String, syn::Path)>, ShouldPanic);
+/// A parsed testrs marker.
+enum ParsedMarker {
+    /// A fixture or test: kind, `cases` bindings (param → provider path), and the
+    /// panic expectation.
+    Item(MarkerKind, Vec<(String, syn::Path)>, ShouldPanic),
+    /// The `#[runtime]` async-bridge provider.
+    Runtime,
+}
 
 /// The testrs marker on an item: its kind, plus any `cases(param = provider)`
 /// bindings (only meaningful on tests).
@@ -140,6 +149,7 @@ fn parse_marker(attrs: &[Attribute]) -> Option<ParsedMarker> {
             let kind = match segs[2].ident.to_string().as_str() {
                 "fixture" => MarkerKind::Fixture,
                 "test" => MarkerKind::Test,
+                "runtime" => return Some(ParsedMarker::Runtime),
                 _ => return None,
             };
 
@@ -181,7 +191,7 @@ fn parse_marker(attrs: &[Attribute]) -> Option<ParsedMarker> {
                     }
                 }
             }
-            return Some((kind, cases, should_panic));
+            return Some(ParsedMarker::Item(kind, cases, should_panic));
         }
     }
     None
@@ -301,12 +311,27 @@ pub fn discover(manifest_path: &Path, package: &str, toolchain: &str) -> Result<
 
     let crate_name = krate.crate_name();
     let mut items = Vec::new();
+    let mut runtime_call: Option<String> = None;
     for (id, item) in index {
         if !matches!(item.inner, ItemEnum::Function(_)) {
             continue;
         }
-        let Some((kind, raw_cases, should_panic)) = parse_marker(&item.attrs) else {
-            continue;
+        let (kind, raw_cases, should_panic) = match parse_marker(&item.attrs) {
+            Some(ParsedMarker::Item(kind, cases, should_panic)) => (kind, cases, should_panic),
+            Some(ParsedMarker::Runtime) => {
+                // The async bridge: record its path, don't treat it as a fixture
+                // (its signature is generic and never enters the graph).
+                let name = item.name.clone().unwrap_or_default();
+                let module = module_path.get(id).cloned().unwrap_or_default();
+                let mut segments = vec![crate_name.clone()];
+                segments.extend(module);
+                segments.push(name);
+                if runtime_call.replace(segments.join("::")).is_some() {
+                    bail!("multiple `#[testrs::runtime]` functions found; only one is allowed");
+                }
+                continue;
+            }
+            None => continue,
         };
         let name = item.name.clone().unwrap_or_default();
         let test_module = module_path.get(id).cloned().unwrap_or_default();
@@ -425,6 +450,7 @@ pub fn discover(manifest_path: &Path, package: &str, toolchain: &str) -> Result<
         manifest_dir,
         target_dir,
         testrs_manifest_dir,
+        runtime_call,
         items,
     })
 }

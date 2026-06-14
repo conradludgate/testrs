@@ -68,17 +68,18 @@ pub(super) fn field_ident(discovery: &Discovery, idx: usize) -> Ident {
     format_ident!("{}", discovery.items[idx].name)
 }
 
-/// `<handle>.block_on(<path>(<args>))` for async items, else the bare call.
+/// `<block_on>(<path>(<args>))` for async items, else the bare call. `block_on`
+/// is the discovered `#[runtime]` provider (or `testrs::block_on` by default).
 pub(super) fn call_tokens(
     discovery: &Discovery,
     idx: usize,
     args: &[TokenStream],
-    handle: &TokenStream,
+    block_on: &TokenStream,
 ) -> TokenStream {
     let path = path_tokens(discovery, idx);
     let call = quote! { #path(#(#args),*) };
     if discovery.items[idx].sig.is_async {
-        quote! { #handle.block_on(#call) }
+        quote! { #block_on(#call) }
     } else {
         call
     }

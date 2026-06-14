@@ -46,6 +46,9 @@
 //! - [`test`] — a test. Also supports `#[test(cases(p = provider, ...))]` for
 //!   data-driven tests (one run per element of the providers' cartesian product)
 //!   and `#[test(should_panic)]` / `#[test(should_panic = "msg")]`.
+//! - [`macro@runtime`] — *(optional)* names the function that runs async
+//!   fixtures/tests to completion. Without one, testrs uses [`block_on`]
+//!   (a runtime-agnostic default); mark one to plug in tokio, async-std, etc.
 //!
 //! A parameter's type controls how it's supplied: `&T` borrows a shared fixture
 //! from an ancestor (or the same) module; `T` takes ownership of a fresh per-test
@@ -65,7 +68,29 @@
 //!
 //! See the project README for the full guide.
 
-pub use testrs_macros::{fixture, test};
+pub use testrs_macros::{fixture, runtime, test};
+
+/// Run a future to completion. This is the runtime-agnostic default the generated
+/// harness uses for every async fixture and test when no [`runtime`] provider is
+/// marked.
+///
+/// It drives the future on the current thread with a minimal executor
+/// ([`pollster`]) and establishes **no** runtime context — so it handles any
+/// async that doesn't need a reactor, but not futures that rely on a specific
+/// runtime (tokio timers/IO, `tokio::spawn`, etc.). For those, mark a function
+/// with [`macro@runtime`] that bridges through your runtime's own `block_on`:
+///
+/// ```ignore
+/// #[testrs::runtime]
+/// fn rt<F: std::future::Future>(f: F) -> F::Output {
+///     use std::sync::OnceLock;
+///     static RT: OnceLock<tokio::runtime::Runtime> = OnceLock::new();
+///     RT.get_or_init(|| tokio::runtime::Runtime::new().unwrap()).block_on(f)
+/// }
+/// ```
+pub fn block_on<F: std::future::Future>(future: F) -> F::Output {
+    pollster::block_on(future)
+}
 
 /// Provides a human-readable name for a test case value.
 ///

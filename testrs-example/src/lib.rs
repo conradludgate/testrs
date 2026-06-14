@@ -159,6 +159,31 @@ pub mod opaque {
     }
 }
 
+/// Async on a real runtime. testrs prescribes no runtime; this `#[testrs::runtime]`
+/// function tells it how to drive async fixtures/tests — here, on tokio. Without
+/// one, the harness uses `testrs::block_on` (pollster), which can't run a tokio
+/// timer like the one below. Only one `#[runtime]` is allowed per crate, and it
+/// governs every async item.
+pub mod async_runtime {
+    use std::future::Future;
+    use std::sync::OnceLock;
+    use std::time::Duration;
+    use testrs::test;
+    use tokio::runtime::Runtime;
+
+    #[testrs::runtime]
+    fn rt<F: Future>(f: F) -> F::Output {
+        static RT: OnceLock<Runtime> = OnceLock::new();
+        RT.get_or_init(|| Runtime::new().unwrap()).block_on(f)
+    }
+
+    #[test]
+    async fn sleeps_on_tokio() {
+        // Needs a tokio runtime context; proves the `#[runtime]` bridge is used.
+        tokio::time::sleep(Duration::from_millis(1)).await;
+    }
+}
+
 /// `&mut` fixtures: setup steps mutate one shared fixture in place. `db` builds
 /// an in-memory database once; `users` and `posts` each borrow it `&mut` to add a
 /// table during setup. The test then borrows the *same* `Db` and sees both tables

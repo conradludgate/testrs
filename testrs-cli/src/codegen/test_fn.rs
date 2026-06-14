@@ -18,6 +18,7 @@ pub(super) fn emit_test(
     graph: &Graph,
     ti: usize,
     key: &str,
+    block_on: &TokenStream,
 ) -> Result<TokenStream> {
     let item = &discovery.items[ti];
     // Qualify the test name with its module path (nextest's `::` convention) so
@@ -67,17 +68,17 @@ pub(super) fn emit_test(
         quote! { format!(#fmt, #(#fmt_args),*).into() }
     };
 
-    let (owned_stmts, owned, needs_mut) = emit_owned(discovery, graph, ti)?;
-    let args = test_args(discovery, graph, ti, &owned);
-    let handle = quote! { handle };
-    let call = call_tokens(discovery, ti, &args, &handle);
+    let owned = emit_owned(discovery, graph, ti, block_on)?;
+    let args = test_args(discovery, graph, ti, &owned.locals);
+    let call = call_tokens(discovery, ti, &args, block_on);
     // An owned fixture with a `&mut` dep mutates the shared store, so borrow it
     // mutably; other reads in the closure project disjoint fields.
-    let borrow = if needs_mut {
+    let borrow = if owned.needs_mut {
         quote! { let mut c = c.borrow_mut(); }
     } else {
         quote! { let c = c.borrow(); }
     };
+    let owned_stmts = &owned.stmts;
 
     let should_panic = match &item.should_panic {
         ShouldPanic::No => quote! {},
@@ -89,15 +90,12 @@ pub(super) fn emit_test(
 
     let mut body = quote! {
         tests.push(Test::new(
-            TestFnHandle::from_boxed({
-                let handle = handle.clone();
-                move || {
-                    FIXTURES.with(|c| {
-                        #borrow
-                        #(#owned_stmts)*
-                        #call;
-                    });
-                }
+            TestFnHandle::from_boxed(move || {
+                FIXTURES.with(|c| {
+                    #borrow
+                    #(#owned_stmts)*
+                    #call;
+                });
             }),
             TestMeta {
                 name: #name_expr,
@@ -179,62 +177,60 @@ fn test_args(
         .collect()
 }
 
-/// Statements building all owned per-test fixtures required (transitively) by
-/// `consumer`, in dependency order; returns them, a fixture→local-ident map, and
-/// whether any built fixture mutably borrows the store (so its closure needs a
-/// mutable borrow).
+/// Accumulator for the per-test owned-fixture build.
+#[derive(Default)]
+struct OwnedFixtures {
+    /// `let <local> = <call>;` statements, in dependency order.
+    stmts: Vec<TokenStream>,
+    /// Fixture index → its local binding ident.
+    locals: HashMap<usize, Ident>,
+    /// Fixtures currently on the build stack (cycle guard).
+    building: HashSet<usize>,
+    /// Whether any built fixture mutably borrows the store.
+    needs_mut: bool,
+}
+
+/// Build all owned per-test fixtures required (transitively) by `consumer`, in
+/// dependency order.
 fn emit_owned(
     discovery: &Discovery,
     graph: &Graph,
     consumer: usize,
-) -> Result<(Vec<TokenStream>, HashMap<usize, Ident>, bool)> {
-    let mut stmts = Vec::new();
-    let mut locals = HashMap::new();
-    let mut building = HashSet::new();
-    let mut needs_mut = false;
-    build_owned(
-        discovery,
-        graph,
-        consumer,
-        &mut stmts,
-        &mut locals,
-        &mut building,
-        &mut needs_mut,
-    )?;
-    Ok((stmts, locals, needs_mut))
+    block_on: &TokenStream,
+) -> Result<OwnedFixtures> {
+    let mut owned = OwnedFixtures::default();
+    build_owned(discovery, graph, consumer, block_on, &mut owned)?;
+    Ok(owned)
 }
 
 fn build_owned(
     discovery: &Discovery,
     graph: &Graph,
     consumer: usize,
-    stmts: &mut Vec<TokenStream>,
-    locals: &mut HashMap<usize, Ident>,
-    building: &mut HashSet<usize>,
-    needs_mut: &mut bool,
+    block_on: &TokenStream,
+    owned: &mut OwnedFixtures,
 ) -> Result<()> {
     for edge in &graph.nodes[consumer].edges {
         if edge.ownership != Ownership::Owned {
             continue;
         }
         let target = edge.target;
-        if locals.contains_key(&target) || !building.insert(target) {
+        if owned.locals.contains_key(&target) || !owned.building.insert(target) {
             continue;
         }
-        build_owned(discovery, graph, target, stmts, locals, building, needs_mut)?;
+        build_owned(discovery, graph, target, block_on, owned)?;
         if graph.nodes[target]
             .edges
             .iter()
             .any(|e| e.ownership == Ownership::BorrowedMut)
         {
-            *needs_mut = true;
+            owned.needs_mut = true;
         }
-        let args = fixture_args(discovery, &graph.nodes[target], locals);
+        let args = fixture_args(discovery, &graph.nodes[target], &owned.locals);
         let local = field_ident(discovery, target);
-        let handle = quote! { handle };
-        let call = call_tokens(discovery, target, &args, &handle);
-        stmts.push(quote! { let #local = #call; });
-        locals.insert(target, local);
+        let call = call_tokens(discovery, target, &args, block_on);
+        owned.stmts.push(quote! { let #local = #call; });
+        owned.locals.insert(target, local);
     }
     Ok(())
 }

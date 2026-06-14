@@ -53,7 +53,6 @@ pub fn run(discovery: &Discovery, graph: &Graph, nextest: bool) -> Result<i32> {
          {package} = {{ path = {manifest_dir:?} }}\n\
          testrs = {{ path = {testrs_dir:?} }}\n\
          kitest = \"0.5\"\n\
-         tokio = {{ version = \"1\", features = [\"rt-multi-thread\"] }}\n\
          \n\
          [[test]]\n\
          name = \"harness\"\n\

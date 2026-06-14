@@ -9,6 +9,7 @@ description = "A pytest-like test framework with compile-time, type-based fixtur
 [dependencies]
 testrs-macros.workspace = true
 lexopt = "0.3"
+pollster = "0.4"
 
 [lints]
 workspace = true
