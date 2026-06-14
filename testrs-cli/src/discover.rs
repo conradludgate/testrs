@@ -7,7 +7,7 @@
 //! input to the fixture dependency graph.
 
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, anyhow, bail};
 use guppy::MetadataCommand;
@@ -60,7 +60,14 @@ pub struct Discovered {
 
 /// All testrs items discovered in a crate.
 pub struct Discovery {
+    /// The crate (lib) name, underscored — used in generated code paths.
     pub crate_name: String,
+    /// The cargo package name — used as the harness crate's path-dependency key.
+    pub package_name: String,
+    /// Directory containing the analyzed package's `Cargo.toml`.
+    pub manifest_dir: PathBuf,
+    /// The workspace target directory (where the ephemeral harness crate lives).
+    pub target_dir: PathBuf,
     pub items: Vec<Discovered>,
 }
 
@@ -99,6 +106,18 @@ pub fn discover(manifest_path: &Path, package: &str, toolchain: &str) -> Result<
         .find(|p| p.name() == package)
         .with_context(|| format!("package `{package}` not found in the workspace"))?;
     let pkg_id = pkg.id().clone();
+    let package_name = pkg.name().to_string();
+    let manifest_dir = pkg
+        .manifest_path()
+        .parent()
+        .expect("manifest path has a parent")
+        .as_std_path()
+        .to_path_buf();
+    let target_dir = graph
+        .workspace()
+        .target_directory()
+        .as_std_path()
+        .to_path_buf();
 
     let cache_dir = std::env::temp_dir().join("testrs-rustdoc-cache");
     std::fs::create_dir_all(&cache_dir)?;
@@ -180,6 +199,9 @@ pub fn discover(manifest_path: &Path, package: &str, toolchain: &str) -> Result<
 
     Ok(Discovery {
         crate_name: krate.crate_name(),
+        package_name,
+        manifest_dir,
+        target_dir,
         items,
     })
 }

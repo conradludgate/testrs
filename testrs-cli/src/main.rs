@@ -1,6 +1,7 @@
 mod codegen;
 mod discover;
 mod graph;
+mod run;
 
 use std::path::PathBuf;
 
@@ -22,6 +23,8 @@ enum Command {
     Graph(Target),
     /// Generate the kitest harness source for a crate (prints to stdout).
     Generate(Target),
+    /// Generate and run the crate's testrs suite (no worktree changes).
+    Test(Target),
 }
 
 #[derive(clap::Args)]
@@ -60,6 +63,16 @@ fn main() -> Result<()> {
             let source = codegen::generate(&discovery, &g)?;
             print!("{source}");
             Ok(())
+        }
+        Command::Test(t) => {
+            let discovery = discover::discover(&t.manifest_path, &t.package, &t.toolchain)?;
+            let g = graph::build(&discovery);
+            if !g.errors.is_empty() {
+                graph::print_graph(&discovery, &g);
+                std::process::exit(1);
+            }
+            let code = run::run(&discovery, &g)?;
+            std::process::exit(code);
         }
     }
 }
