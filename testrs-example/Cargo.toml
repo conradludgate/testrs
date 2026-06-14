@@ -7,3 +7,13 @@ publish = false
 
 [dependencies]
 testrs = { path = "../testrs" }
+
+[dev-dependencies]
+kitest = "0.5"
+tokio = { version = "1", features = ["rt-multi-thread"] }
+
+# The testrs-generated harness; runs under `cargo test -p testrs-example`.
+[[test]]
+name = "harness"
+path = "tests/harness.rs"
+harness = false
