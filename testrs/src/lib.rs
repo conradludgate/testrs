@@ -47,8 +47,12 @@
 //!   data-driven tests (one run per element of the providers' cartesian product)
 //!   and `#[test(should_panic)]` / `#[test(should_panic = "msg")]`.
 //!
-//! A parameter's type controls how it's supplied: `&T` borrows a fixture from an
-//! ancestor (or the same) module; `T` takes ownership of a fresh per-test value.
+//! A parameter's type controls how it's supplied: `&T` borrows a shared fixture
+//! from an ancestor (or the same) module; `T` takes ownership of a fresh per-test
+//! value. A fixture (not a test) may also take `&mut T` to mutate a shared
+//! dependency in place during setup — e.g. a `database` fixture plus `users` /
+//! `posts` fixtures that each `&mut`-borrow it to add a table, so the test sees a
+//! single database with every table.
 //!
 //! # Requirements
 //!

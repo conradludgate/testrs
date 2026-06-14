@@ -284,8 +284,17 @@ A fixture/test parameter's type decides how the value is supplied:
 
 - **`&T`** — a fixture defined in an **ancestor** (or the same) module, borrowed
   from the shared fixture stack.
+- **`&mut T`** — *(fixtures only)* an **exclusive** borrow of a shared fixture, to
+  mutate it in place during setup. Because shared fixtures are built one at a time,
+  no two `&mut` borrows are ever live at once. Tests may not take `&mut` (their
+  writes would leak into later tests). A consumer can't borrow the same fixture
+  both `&mut` and another way.
 - **`T`** — a **per-test** fixture in the same module, constructed fresh and moved
   in.
+
+This is what lets a `database` fixture be set up by several sibling fixtures —
+each taking `&mut Database` to add a table — so the test borrowing `&Database`
+sees one instance with every table, rather than a separate database per setup step.
 
 ### Fixture resolution
 
@@ -345,6 +354,8 @@ Defaults: `--manifest-path Cargo.toml`, `--toolchain nightly-2026-04-16`.
 - **ambiguous** — two fixtures produce it at the same scope,
 - **owns-ancestor** — a `T` parameter resolves to a fixture shared at a broader
   scope (borrow it with `&` instead),
+- **mut-in-test** — a test parameter takes `&mut` (only fixtures may),
+- **mut-alias** — a consumer borrows one fixture both `&mut` and another way,
 - **cycle** — fixtures depend on each other circularly.
 
 ---
