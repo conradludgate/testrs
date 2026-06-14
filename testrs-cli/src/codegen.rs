@@ -277,7 +277,6 @@ pub fn generate(discovery: &Discovery, graph: &Graph) -> Result<String> {
     writeln!(out)?;
     writeln!(out, "use std::cell::RefCell;")?;
     writeln!(out, "use std::ops::ControlFlow;")?;
-    writeln!(out, "use std::process::Termination;")?;
     writeln!(out)?;
     writeln!(out, "use kitest::group::{{TestGroupOutcomes, TestGroupRunner}};")?;
     writeln!(out, "use kitest::prelude::*;")?;
@@ -416,11 +415,28 @@ pub fn generate(discovery: &Discovery, graph: &Graph) -> Result<String> {
     writeln!(out, "}}")?;
     writeln!(out)?;
 
-    writeln!(out, "fn main() -> impl Termination {{")?;
+    writeln!(out, "fn main() -> std::process::ExitCode {{")?;
     writeln!(out, "    let rt = tokio::runtime::Runtime::new().unwrap();")?;
     writeln!(out, "    let handle = rt.handle().clone();")?;
-    writeln!(out, "    let tests = tests(handle.clone());")?;
-    writeln!(out, "    kitest::harness(&tests)")?;
+    writeln!(out, "    let all = tests(handle.clone());")?;
+    writeln!(out, "    let args = testrs::TestArgs::from_env();")?;
+    // `--list`: print `<name>: test` lines for nextest/`cargo test --list`.
+    // testrs has no ignored tests yet, so `--ignored` lists nothing.
+    writeln!(out, "    if args.list {{")?;
+    writeln!(out, "        if !args.ignored {{")?;
+    writeln!(out, "            for t in &all {{")?;
+    writeln!(out, "                println!(\"{{}}: test\", t.meta.name);")?;
+    writeln!(out, "            }}")?;
+    writeln!(out, "        }}")?;
+    writeln!(out, "        return std::process::ExitCode::SUCCESS;")?;
+    writeln!(out, "    }}")?;
+    // Plain filtering: build everything, then keep matching tests (only their
+    // groups' fixtures get set up). Per-case expansion optimisation is future work.
+    writeln!(
+        out,
+        "    let selected: Vec<_> = all.into_iter().filter(|t| args.matches(&t.meta.name)).collect();"
+    )?;
+    writeln!(out, "    kitest::harness(&selected)")?;
     writeln!(out, "        .with_grouper(|m: &TestMeta<&'static str>| m.extra)")?;
     // Visit groups in module-path order so a scope's descendants are contiguous
     // and ancestor fixtures are reused rather than rebuilt.
@@ -434,7 +450,7 @@ pub fn generate(discovery: &Discovery, graph: &Graph) -> Result<String> {
     )?;
     writeln!(out, "        .with_runner(SimpleRunner::default())")?;
     writeln!(out, "        .run()")?;
-    writeln!(out, "        .report()")?;
+    writeln!(out, "        .exit_code()")?;
     writeln!(out, "}}")?;
 
     Ok(out)
