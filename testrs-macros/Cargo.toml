@@ -10,7 +10,6 @@ description = "Proc-macro markers for testrs: #[fixture] and #[test]."
 proc-macro = true
 
 [dependencies]
-syn = { version = "2", features = ["full"] }
 quote = "1"
 proc-macro2 = "1"
 

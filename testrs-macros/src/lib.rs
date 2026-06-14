@@ -16,28 +16,20 @@
 //! ```
 
 use proc_macro::TokenStream;
-use proc_macro2::{Ident, Span, TokenStream as TokenStream2};
+use proc_macro2::{Delimiter, Ident, Span, TokenStream as TokenStream2, TokenTree};
 use quote::quote;
-use syn::{ItemFn, Visibility, parse_quote};
 
 /// Emit the annotated function, prefixed with a
 /// `#[diagnostic::testrs::<kind>(<args>)]` marker carrying the macro's arguments.
 ///
-/// The generated kitest harness lives in a separate target, so it can only call
+/// The generated kitest harness lives in a separate crate, so it can only call
 /// fixtures/tests through the crate's public path. We therefore promote a
 /// plain (private) marked function to `pub`; functions with an explicit
 /// visibility are left as written.
 fn mark(kind: &str, attr: TokenStream, item: TokenStream) -> TokenStream {
     let kind = Ident::new(kind, Span::call_site());
     let args = TokenStream2::from(attr);
-
-    let mut func: ItemFn = match syn::parse(item) {
-        Ok(func) => func,
-        Err(err) => return err.to_compile_error().into(),
-    };
-    if matches!(func.vis, Visibility::Inherited) {
-        func.vis = parse_quote!(pub);
-    }
+    let item = ensure_pub(TokenStream2::from(item));
 
     let marker = if args.is_empty() {
         quote! { #[diagnostic::testrs::#kind] }
@@ -51,9 +43,37 @@ fn mark(kind: &str, attr: TokenStream, item: TokenStream) -> TokenStream {
     quote! {
         #[allow(dead_code)]
         #marker
-        #func
+        #item
     }
     .into()
+}
+
+/// Prepend `pub` to the item unless it already carries a visibility. Leading
+/// outer attributes (`#[...]`) are skipped; the first remaining token decides —
+/// if it's `pub` the item is left untouched, otherwise `pub` is inserted there.
+fn ensure_pub(item: TokenStream2) -> TokenStream2 {
+    let tokens: Vec<TokenTree> = item.into_iter().collect();
+
+    let mut i = 0;
+    while let Some(TokenTree::Punct(p)) = tokens.get(i) {
+        if p.as_char() != '#' {
+            break;
+        }
+        match tokens.get(i + 1) {
+            Some(TokenTree::Group(g)) if g.delimiter() == Delimiter::Bracket => i += 2,
+            _ => break,
+        }
+    }
+
+    if matches!(tokens.get(i), Some(TokenTree::Ident(id)) if *id == "pub") {
+        return tokens.into_iter().collect();
+    }
+
+    let mut out = TokenStream2::new();
+    out.extend(tokens[..i].iter().cloned());
+    out.extend([TokenTree::Ident(Ident::new("pub", Span::call_site()))]);
+    out.extend(tokens[i..].iter().cloned());
+    out
 }
 
 /// Marks a function as a testrs fixture.

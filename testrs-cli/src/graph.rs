@@ -85,9 +85,10 @@ pub fn build(discovery: &Discovery) -> Graph {
     let mut by_type: HashMap<Type, Vec<usize>> = HashMap::new();
     for (i, it) in items.iter().enumerate() {
         if it.kind == MarkerKind::Fixture
-            && let Some(out) = &it.sig.output {
-                by_type.entry(out.clone()).or_default().push(i);
-            }
+            && let Some(out) = &it.sig.output
+        {
+            by_type.entry(out.clone()).or_default().push(i);
+        }
     }
 
     let mut nodes = Vec::new();

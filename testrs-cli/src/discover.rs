@@ -150,37 +150,37 @@ fn parse_marker(attrs: &[Attribute]) -> Option<ParsedMarker> {
             if let Meta::List(list) = &a.meta
                 && let Ok(args) =
                     list.parse_args_with(Punctuated::<Meta, Token![,]>::parse_terminated)
-                {
-                    for arg in args {
-                        match arg {
-                            Meta::List(inner) if inner.path.is_ident("cases") => {
-                                if let Ok(pairs) = inner.parse_args_with(
-                                    Punctuated::<syn::MetaNameValue, Token![,]>::parse_terminated,
-                                ) {
-                                    for nv in pairs {
-                                        if let (Some(param), Expr::Path(provider)) =
-                                            (nv.path.get_ident(), &nv.value)
-                                        {
-                                            cases.push((param.to_string(), provider.path.clone()));
-                                        }
+            {
+                for arg in args {
+                    match arg {
+                        Meta::List(inner) if inner.path.is_ident("cases") => {
+                            if let Ok(pairs) = inner.parse_args_with(
+                                Punctuated::<syn::MetaNameValue, Token![,]>::parse_terminated,
+                            ) {
+                                for nv in pairs {
+                                    if let (Some(param), Expr::Path(provider)) =
+                                        (nv.path.get_ident(), &nv.value)
+                                    {
+                                        cases.push((param.to_string(), provider.path.clone()));
                                     }
                                 }
                             }
-                            Meta::Path(p) if p.is_ident("should_panic") => {
-                                should_panic = ShouldPanic::Any;
-                            }
-                            Meta::NameValue(nv) if nv.path.is_ident("should_panic") => {
-                                if let Expr::Lit(ExprLit {
-                                    lit: Lit::Str(s), ..
-                                }) = &nv.value
-                                {
-                                    should_panic = ShouldPanic::With(s.value());
-                                }
-                            }
-                            _ => {}
                         }
+                        Meta::Path(p) if p.is_ident("should_panic") => {
+                            should_panic = ShouldPanic::Any;
+                        }
+                        Meta::NameValue(nv) if nv.path.is_ident("should_panic") => {
+                            if let Expr::Lit(ExprLit {
+                                lit: Lit::Str(s), ..
+                            }) = &nv.value
+                            {
+                                should_panic = ShouldPanic::With(s.value());
+                            }
+                        }
+                        _ => {}
                     }
                 }
+            }
             return Some((kind, cases, should_panic));
         }
     }
