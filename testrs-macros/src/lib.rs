@@ -32,7 +32,11 @@ fn mark(kind: &str, attr: TokenStream, item: TokenStream) -> TokenStream {
         quote! { #[diagnostic::testrs::#kind(#args)] }
     };
 
+    // The only caller of a fixture/test is the generated harness, which the
+    // compiler can't see while checking this crate — so suppress dead-code for
+    // the marked item (precisely, rather than crate-wide).
     quote! {
+        #[allow(dead_code)]
         #marker
         #item
     }

@@ -3,7 +3,6 @@
 //! These fixtures/tests aren't executed yet — they exist so the `testrs` CLI
 //! has a real target to discover markers in and resolve signatures against.
 #![allow(unknown_or_malformed_diagnostic_attributes)]
-#![allow(dead_code)]
 
 use testrs::fixture;
 
