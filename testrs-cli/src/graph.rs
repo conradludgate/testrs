@@ -7,9 +7,10 @@
 //! ownership from the parameter (`&T` borrowed / `T` owned), then validate:
 //! missing fixtures, same-level ambiguity, owning a shared ancestor, and cycles.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use rustdoc_ir::Type;
+use termtree::Tree;
 
 use crate::discover::{Discovery, MarkerKind, scope_label};
 
@@ -248,28 +249,27 @@ fn topo_sort_fixtures(discovery: &Discovery, nodes: &[Node]) -> (Vec<usize>, Opt
 }
 
 pub fn print_graph(discovery: &Discovery, graph: &Graph) {
-    let items = &discovery.items;
-    let label = |i: usize| format!("{}@{}", items[i].name, scope_label(&items[i].module_path));
+    println!("dependency graph for {}", discovery.crate_name);
 
-    println!("dependency graph for {}\n", discovery.crate_name);
-
+    // Each test is the root of its transitive fixture-dependency tree.
     for node in &graph.nodes {
-        let consumer = &items[node.item];
-        println!("[{}] {}", consumer.kind.label(), label(node.item));
-        if node.edges.is_empty() {
-            println!("    (no dependencies)");
+        if discovery.items[node.item].kind != MarkerKind::Test {
+            continue;
         }
+        let mut tree = Tree::new(format!("[test] {}", node_label(discovery, node.item)));
+        let mut path = HashSet::from([node.item]);
         for edge in &node.edges {
-            let arrow = match edge.ownership {
-                Ownership::Borrowed => "&",
-                Ownership::Owned => " ",
-            };
-            println!("    {}{} -> {}", arrow, edge.param, label(edge.target));
+            tree.push(edge_tree(discovery, graph, edge, &mut path));
         }
+        print!("\n{tree}");
     }
 
     if !graph.fixture_order.is_empty() {
-        let order: Vec<String> = graph.fixture_order.iter().map(|&i| label(i)).collect();
+        let order: Vec<String> = graph
+            .fixture_order
+            .iter()
+            .map(|&i| node_label(discovery, i))
+            .collect();
         println!("\nfixture setup order: {}", order.join(", "));
     }
 
@@ -281,6 +281,42 @@ pub fn print_graph(discovery: &Discovery, graph: &Graph) {
             print_error(err);
         }
     }
+}
+
+fn node_label(discovery: &Discovery, i: usize) -> String {
+    format!(
+        "{}@{}",
+        discovery.items[i].name,
+        scope_label(&discovery.items[i].module_path)
+    )
+}
+
+/// A subtree for one dependency edge: the edge is the node, the target fixture's
+/// own dependencies are its children. A cycle is shown as a leaf, not recursed.
+fn edge_tree(
+    discovery: &Discovery,
+    graph: &Graph,
+    edge: &Edge,
+    path: &mut HashSet<usize>,
+) -> Tree<String> {
+    let prefix = match edge.ownership {
+        Ownership::Borrowed => "&",
+        Ownership::Owned => "",
+    };
+    let label = format!(
+        "{prefix}{} → {}",
+        edge.param,
+        node_label(discovery, edge.target)
+    );
+    if !path.insert(edge.target) {
+        return Tree::new(format!("{label} (cycle)"));
+    }
+    let mut tree = Tree::new(label);
+    for child in &graph.nodes[edge.target].edges {
+        tree.push(edge_tree(discovery, graph, child, path));
+    }
+    path.remove(&edge.target);
+    tree
 }
 
 fn print_error(err: &GraphError) {
