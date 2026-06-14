@@ -1,7 +1,7 @@
 //! Example crate exercising the testrs marker macros.
 //!
-//! These fixtures/tests aren't executed yet — they exist so the `testrs` CLI
-//! has a real target to discover markers in and resolve signatures against.
+//! These fixtures/tests aren't executed by `cargo test` directly — run them
+//! with `testrs test testrs-example`.
 #![allow(unknown_or_malformed_diagnostic_attributes)]
 
 use testrs::fixture;
@@ -14,7 +14,7 @@ pub struct User {
     pub id: u64,
 }
 
-/// Suite-wide config fixture.
+/// Suite-wide config fixture, shared across every group.
 #[fixture]
 fn config() -> Config {
     Config {
@@ -22,10 +22,11 @@ fn config() -> Config {
     }
 }
 
-/// Database fixture, borrowing the ancestor `Config`.
+/// Database fixture, borrowing the ancestor `Config`. Built once and reused by
+/// both the `users` and `posts` groups.
 #[fixture]
 async fn database(config: &Config) -> Database {
-    let _ = config;
+    let _ = &config.url;
     Database
 }
 
@@ -43,5 +44,20 @@ pub mod users {
     #[test]
     async fn test_find_user(db: &Database, user: User) {
         let _ = (db, user);
+    }
+
+    #[test]
+    async fn test_list_users(db: &Database) {
+        let _ = db;
+    }
+}
+
+pub mod posts {
+    use super::Database;
+    use testrs::test;
+
+    #[test]
+    async fn test_create_post(db: &Database) {
+        let _ = db;
     }
 }
