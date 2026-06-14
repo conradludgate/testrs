@@ -303,6 +303,12 @@ pub fn generate(discovery: &Discovery, graph: &Graph) -> Result<String> {
     writeln!(out, "    let tests = tests(handle.clone());")?;
     writeln!(out, "    kitest::harness(&tests)")?;
     writeln!(out, "        .with_grouper(|m: &TestMeta<&'static str>| m.extra)")?;
+    // Visit groups in module-path order so a scope's descendants are contiguous
+    // and ancestor fixtures are reused rather than rebuilt.
+    writeln!(
+        out,
+        "        .with_groups(kitest::group::TestGroupBTreeMap::new())"
+    )?;
     writeln!(
         out,
         "        .with_group_runner(FixtureRunner {{ handle, active: RefCell::new(Vec::new()) }})"
