@@ -2,10 +2,11 @@
 //!
 //! This runs `cargo rustdoc` (under a pinned nightly) against the target crate
 //! via rustdoc-reflection, scans every item's `attrs` for a
-//! `#[diagnostic::testrs::*]` marker, and resolves each marked function's
-//! signature into `rustdoc_ir` types — the input to the fixture dependency
-//! graph.
+//! `#[diagnostic::testrs::*]` marker, records each marked function's position in
+//! the module tree, and resolves its signature into `rustdoc_ir` types — the
+//! input to the fixture dependency graph.
 
+use std::collections::HashMap;
 use std::path::Path;
 
 use anyhow::{Context, Result, anyhow, bail};
@@ -16,11 +17,11 @@ use rustdoc_processor::compute::NoProgress;
 use rustdoc_processor::crate_data::CrateItemIndex;
 use rustdoc_processor::indexing::NoAnnotations;
 use rustdoc_resolver::{TypeAliasResolution, resolve_free_function};
-use rustdoc_types::{Attribute, Item, ItemEnum};
+use rustdoc_types::{Attribute, Id, ItemEnum};
 use syn::parse::Parser;
 
-/// Nightly toolchain used to emit rustdoc JSON for the target crate. Must emit
-/// a format version matching the `rustdoc-types` version rustdoc-reflection uses
+/// Nightly toolchain used to emit rustdoc JSON for the target crate. Must emit a
+/// format version matching the `rustdoc-types` version rustdoc-reflection uses
 /// (currently format_version 57 == rustdoc-types 0.57.3).
 pub const DEFAULT_TOOLCHAIN: &str = "nightly-2026-04-16";
 
@@ -32,12 +33,35 @@ pub enum MarkerKind {
 }
 
 impl MarkerKind {
-    fn label(self) -> &'static str {
+    pub fn label(self) -> &'static str {
         match self {
             MarkerKind::Fixture => "fixture",
             MarkerKind::Test => "test",
         }
     }
+}
+
+/// A resolved function signature, decoupled from rustdoc-reflection's types.
+pub struct Signature {
+    pub inputs: Vec<(String, rustdoc_ir::Type)>,
+    pub output: Option<rustdoc_ir::Type>,
+    pub is_async: bool,
+}
+
+/// A discovered fixture or test, with its module-tree position and signature.
+pub struct Discovered {
+    pub kind: MarkerKind,
+    pub name: String,
+    /// Module path relative to the crate root. Empty means the crate root
+    /// itself (suite scope).
+    pub module_path: Vec<String>,
+    pub sig: Signature,
+}
+
+/// All testrs items discovered in a crate.
+pub struct Discovery {
+    pub crate_name: String,
+    pub items: Vec<Discovered>,
 }
 
 /// Return the testrs marker kind carried by an item's attributes, if any.
@@ -51,27 +75,20 @@ fn marker_kind(attrs: &[Attribute]) -> Option<MarkerKind> {
             continue;
         };
         for a in parsed {
-            let segments: Vec<String> = a
-                .path()
-                .segments
-                .iter()
-                .map(|s| s.ident.to_string())
-                .collect();
-            if let ["diagnostic", "testrs", kind] =
-                segments.iter().map(String::as_str).collect::<Vec<_>>()[..]
-            {
-                match kind {
-                    "fixture" => return Some(MarkerKind::Fixture),
-                    "test" => return Some(MarkerKind::Test),
-                    _ => {}
-                }
+            let segs = &a.path().segments;
+            if segs.len() == 3 && segs[0].ident == "diagnostic" && segs[1].ident == "testrs" {
+                return match segs[2].ident.to_string().as_str() {
+                    "fixture" => Some(MarkerKind::Fixture),
+                    "test" => Some(MarkerKind::Test),
+                    _ => None,
+                };
             }
         }
     }
     None
 }
 
-pub fn run(manifest_path: &Path, package: &str, toolchain: &str) -> Result<()> {
+pub fn discover(manifest_path: &Path, package: &str, toolchain: &str) -> Result<Discovery> {
     let graph = MetadataCommand::new()
         .manifest_path(manifest_path)
         .build_graph()
@@ -108,32 +125,94 @@ pub fn run(manifest_path: &Path, package: &str, toolchain: &str) -> Result<()> {
         }
     };
 
-    let mut marked: Vec<(MarkerKind, String, &Item)> = Vec::new();
-    for item in index.values() {
+    // Walk the module tree from the crate root, recording each item's containing
+    // module path. This covers private items (which `--document-private-items`
+    // keeps), and is the tree the fixture scoping rules operate on.
+    let mut module_path: HashMap<Id, Vec<String>> = HashMap::new();
+    let mut stack: Vec<(Id, Vec<String>)> = vec![(krate.core.krate.root_item_id, Vec::new())];
+    while let Some((id, prefix)) = stack.pop() {
+        let Some(item) = index.get(&id) else { continue };
+        let ItemEnum::Module(module) = &item.inner else {
+            continue;
+        };
+        for &child in &module.items {
+            let Some(child_item) = index.get(&child) else {
+                continue;
+            };
+            if matches!(child_item.inner, ItemEnum::Module(_)) {
+                let mut nested = prefix.clone();
+                nested.push(child_item.name.clone().unwrap_or_default());
+                stack.push((child, nested));
+            } else {
+                module_path.insert(child, prefix.clone());
+            }
+        }
+    }
+
+    let mut items = Vec::new();
+    for (id, item) in index {
         if !matches!(item.inner, ItemEnum::Function(_)) {
             continue;
         }
-        if let Some(kind) = marker_kind(&item.attrs) {
-            marked.push((kind, item.name.clone().unwrap_or_default(), item));
-        }
-    }
-    marked.sort_by(|a, b| (a.0, &a.1).cmp(&(b.0, &b.1)));
-
-    println!("{package}: discovered {} testrs item(s)", marked.len());
-    for (kind, name, item) in &marked {
+        let Some(kind) = marker_kind(&item.attrs) else {
+            continue;
+        };
+        let name = item.name.clone().unwrap_or_default();
         let func = resolve_free_function(item, krate, &collection, TypeAliasResolution::ResolveThrough)
             .map_err(|e| anyhow!("resolving `{name}`: {e:?}"))?;
+        items.push(Discovered {
+            kind,
+            name,
+            module_path: module_path.get(id).cloned().unwrap_or_default(),
+            sig: Signature {
+                inputs: func
+                    .header
+                    .inputs
+                    .iter()
+                    .map(|i| (i.name.to_string(), i.type_.clone()))
+                    .collect(),
+                output: func.header.output.clone(),
+                is_async: func.header.is_async,
+            },
+        });
+    }
+    items.sort_by(|a, b| (a.kind, &a.module_path, &a.name).cmp(&(b.kind, &b.module_path, &b.name)));
 
-        let asyncness = if func.header.is_async { " async" } else { "" };
-        println!("\n[{}]{asyncness} {name}", kind.label());
-        for input in &func.header.inputs {
-            println!("    {}: {:?}", input.name, input.type_);
+    Ok(Discovery {
+        crate_name: krate.crate_name(),
+        items,
+    })
+}
+
+/// Render a module path relative to the crate root for display.
+pub fn scope_label(module_path: &[String]) -> String {
+    if module_path.is_empty() {
+        "crate".to_string()
+    } else {
+        format!("crate::{}", module_path.join("::"))
+    }
+}
+
+pub fn print_discovery(discovery: &Discovery) {
+    println!(
+        "{}: discovered {} testrs item(s)",
+        discovery.crate_name,
+        discovery.items.len()
+    );
+    for item in &discovery.items {
+        let asyncness = if item.sig.is_async { " async" } else { "" };
+        println!(
+            "\n[{}]{asyncness} {}  (module: {})",
+            item.kind.label(),
+            item.name,
+            scope_label(&item.module_path),
+        );
+        for (name, ty) in &item.sig.inputs {
+            println!("    {name}: {ty:?}");
         }
-        match &func.header.output {
+        match &item.sig.output {
             Some(ty) => println!("    -> {ty:?}"),
             None => println!("    -> ()"),
         }
     }
-
-    Ok(())
 }

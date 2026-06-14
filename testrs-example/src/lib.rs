@@ -5,7 +5,7 @@
 #![allow(unknown_or_malformed_diagnostic_attributes)]
 #![allow(dead_code)]
 
-use testrs::{fixture, test};
+use testrs::fixture;
 
 pub struct Config {
     pub url: String,
@@ -30,14 +30,19 @@ async fn database(config: &Config) -> Database {
     Database
 }
 
-/// Per-test fixture producing an owned `User`.
-#[fixture]
-fn user(db: &Database) -> User {
-    let _ = db;
-    User { id: 1 }
-}
+pub mod users {
+    use super::{Database, User};
+    use testrs::{fixture, test};
 
-#[test]
-async fn test_find_user(db: &Database, user: User) {
-    let _ = (db, user);
+    /// Per-test fixture producing an owned `User`.
+    #[fixture]
+    fn user(db: &Database) -> User {
+        let _ = db;
+        User { id: 1 }
+    }
+
+    #[test]
+    async fn test_find_user(db: &Database, user: User) {
+        let _ = (db, user);
+    }
 }

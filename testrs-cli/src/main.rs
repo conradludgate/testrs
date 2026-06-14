@@ -34,6 +34,10 @@ fn main() -> Result<()> {
             package,
             manifest_path,
             toolchain,
-        } => discover::run(&manifest_path, &package, &toolchain),
+        } => {
+            let discovery = discover::discover(&manifest_path, &package, &toolchain)?;
+            discover::print_discovery(&discovery);
+            Ok(())
+        }
     }
 }
