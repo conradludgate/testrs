@@ -35,11 +35,12 @@ pub fn generate(discovery: &Discovery, graph: &Graph) -> Result<String> {
         bail!("cannot generate a harness: the fixture graph has unresolved errors");
     }
 
-    // A fixture is "shared" (lives in the store) if anything borrows it.
+    // A fixture is "shared" (lives in the store) if anything borrows it — `&` or
+    // `&mut`. A `&mut` borrow mutates that one stored instance in place.
     let mut shared: HashSet<usize> = HashSet::new();
     for node in &graph.nodes {
         for edge in &node.edges {
-            if edge.ownership == Ownership::Borrowed {
+            if matches!(edge.ownership, Ownership::Borrowed | Ownership::BorrowedMut) {
                 shared.insert(edge.target);
             }
         }
@@ -109,9 +110,20 @@ pub fn generate(discovery: &Discovery, graph: &Graph) -> Result<String> {
         } else {
             let args = fixture_args(discovery, node, &HashMap::new());
             let call = call_tokens(discovery, fi, &args, &handle);
+            // A `&mut` dep needs a mutable borrow of the store; disjoint fields
+            // let other `&` deps read from the same `RefMut`.
+            let borrow = if node
+                .edges
+                .iter()
+                .any(|e| e.ownership == Ownership::BorrowedMut)
+            {
+                quote! { let mut c = c.borrow_mut(); }
+            } else {
+                quote! { let c = c.borrow(); }
+            };
             quote! {
                 let value = FIXTURES.with(|c| {
-                    let c = c.borrow();
+                    #borrow
                     #call
                 });
             }

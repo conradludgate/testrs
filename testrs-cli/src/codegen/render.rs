@@ -98,6 +98,10 @@ pub(super) fn fixture_args(
                 let f = field_ident(discovery, edge.target);
                 quote! { c.#f.as_ref().unwrap() }
             }
+            Ownership::BorrowedMut => {
+                let f = field_ident(discovery, edge.target);
+                quote! { c.#f.as_mut().unwrap() }
+            }
             Ownership::Owned => {
                 let l = &owned[&edge.target];
                 quote! { #l }

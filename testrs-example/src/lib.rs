@@ -159,6 +159,48 @@ pub mod opaque {
     }
 }
 
+/// `&mut` fixtures: setup steps mutate one shared fixture in place. `db` builds
+/// an in-memory database once; `users` and `posts` each borrow it `&mut` to add a
+/// table during setup. The test then borrows the *same* `Db` and sees both tables
+/// — the shared-root diamond that per-fixture-instantiation frameworks can't
+/// express (there, each setup step would get its own database).
+pub mod mocks {
+    use testrs::{fixture, test};
+
+    #[derive(Default)]
+    pub struct Db {
+        pub tables: Vec<&'static str>,
+    }
+    pub struct Users;
+    pub struct Posts;
+
+    #[fixture]
+    fn db() -> Db {
+        eprintln!("[mocks] building the in-memory database (once)");
+        Db::default()
+    }
+
+    #[fixture]
+    fn users(db: &mut Db) -> Users {
+        db.tables.push("users");
+        Users
+    }
+
+    #[fixture]
+    fn posts(db: &mut Db) -> Posts {
+        db.tables.push("posts");
+        Posts
+    }
+
+    #[test]
+    fn both_tables_share_one_db(db: &Db, _u: &Users, _p: &Posts) {
+        // One Db: both setup fixtures mutated the same shared instance.
+        assert_eq!(db.tables.len(), 2);
+        assert!(db.tables.contains(&"users"));
+        assert!(db.tables.contains(&"posts"));
+    }
+}
+
 /// Product cases: the test runs over `lefts` × `rights`.
 pub mod product {
     use testrs::test;

@@ -67,10 +67,17 @@ pub(super) fn emit_test(
         quote! { format!(#fmt, #(#fmt_args),*).into() }
     };
 
-    let (owned_stmts, owned) = emit_owned(discovery, graph, ti)?;
+    let (owned_stmts, owned, needs_mut) = emit_owned(discovery, graph, ti)?;
     let args = test_args(discovery, graph, ti, &owned);
     let handle = quote! { handle };
     let call = call_tokens(discovery, ti, &args, &handle);
+    // An owned fixture with a `&mut` dep mutates the shared store, so borrow it
+    // mutably; other reads in the closure project disjoint fields.
+    let borrow = if needs_mut {
+        quote! { let mut c = c.borrow_mut(); }
+    } else {
+        quote! { let c = c.borrow(); }
+    };
 
     let should_panic = match &item.should_panic {
         ShouldPanic::No => quote! {},
@@ -86,7 +93,7 @@ pub(super) fn emit_test(
                 let handle = handle.clone();
                 move || {
                     FIXTURES.with(|c| {
-                        let c = c.borrow();
+                        #borrow
                         #(#owned_stmts)*
                         #call;
                     });
@@ -156,6 +163,12 @@ fn test_args(
                         let f = field_ident(discovery, edge.target);
                         quote! { c.#f.as_ref().unwrap() }
                     }
+                    // Tests can't take `&mut` (rejected during graph validation),
+                    // so this arm only exists for exhaustiveness.
+                    Ownership::BorrowedMut => {
+                        let f = field_ident(discovery, edge.target);
+                        quote! { c.#f.as_mut().unwrap() }
+                    }
                     Ownership::Owned => {
                         let l = &owned[&edge.target];
                         quote! { #l }
@@ -167,15 +180,18 @@ fn test_args(
 }
 
 /// Statements building all owned per-test fixtures required (transitively) by
-/// `consumer`, in dependency order; returns them plus a fixture→local-ident map.
+/// `consumer`, in dependency order; returns them, a fixture→local-ident map, and
+/// whether any built fixture mutably borrows the store (so its closure needs a
+/// mutable borrow).
 fn emit_owned(
     discovery: &Discovery,
     graph: &Graph,
     consumer: usize,
-) -> Result<(Vec<TokenStream>, HashMap<usize, Ident>)> {
+) -> Result<(Vec<TokenStream>, HashMap<usize, Ident>, bool)> {
     let mut stmts = Vec::new();
     let mut locals = HashMap::new();
     let mut building = HashSet::new();
+    let mut needs_mut = false;
     build_owned(
         discovery,
         graph,
@@ -183,8 +199,9 @@ fn emit_owned(
         &mut stmts,
         &mut locals,
         &mut building,
+        &mut needs_mut,
     )?;
-    Ok((stmts, locals))
+    Ok((stmts, locals, needs_mut))
 }
 
 fn build_owned(
@@ -194,6 +211,7 @@ fn build_owned(
     stmts: &mut Vec<TokenStream>,
     locals: &mut HashMap<usize, Ident>,
     building: &mut HashSet<usize>,
+    needs_mut: &mut bool,
 ) -> Result<()> {
     for edge in &graph.nodes[consumer].edges {
         if edge.ownership != Ownership::Owned {
@@ -203,7 +221,14 @@ fn build_owned(
         if locals.contains_key(&target) || !building.insert(target) {
             continue;
         }
-        build_owned(discovery, graph, target, stmts, locals, building)?;
+        build_owned(discovery, graph, target, stmts, locals, building, needs_mut)?;
+        if graph.nodes[target]
+            .edges
+            .iter()
+            .any(|e| e.ownership == Ownership::BorrowedMut)
+        {
+            *needs_mut = true;
+        }
         let args = fixture_args(discovery, &graph.nodes[target], locals);
         let local = field_ident(discovery, target);
         let handle = quote! { handle };

@@ -4,8 +4,9 @@
 //! test) parameter, we strip a leading `&` to get the underlying type, then find
 //! the fixture producing it whose module is the *closest ancestor-or-equal* of
 //! the consumer's module — the design's module-tree resolution rule. We classify
-//! ownership from the parameter (`&T` borrowed / `T` owned), then validate:
-//! missing fixtures, same-level ambiguity, owning a shared ancestor, and cycles.
+//! ownership from the parameter (`&T` borrowed / `&mut T` mutably borrowed / `T`
+//! owned), then validate: missing fixtures, same-level ambiguity, owning a
+//! shared ancestor, `&mut` aliasing, `&mut` in a test, and cycles.
 
 use std::collections::{HashMap, HashSet};
 
@@ -17,6 +18,10 @@ use crate::discover::{Discovery, MarkerKind, scope_label};
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Ownership {
     Borrowed,
+    /// `&mut T`: an exclusive borrow of a shared fixture. Only fixtures may take
+    /// these, and only to mutate a shared dependency during their own (sequential)
+    /// setup — so no two `&mut` borrows are ever live at once.
+    BorrowedMut,
     Owned,
 }
 
@@ -52,6 +57,15 @@ pub enum GraphError {
         param: String,
         fixture: String,
     },
+    MutInTest {
+        consumer: String,
+        param: String,
+    },
+    MutAlias {
+        consumer: String,
+        param: String,
+        fixture: String,
+    },
     Cycle {
         path: Vec<String>,
     },
@@ -68,7 +82,14 @@ pub struct Graph {
 /// the parameter borrowed it.
 fn deref(ty: &Type) -> (&Type, Ownership) {
     match ty {
-        Type::Reference(r) => (r.inner.as_ref(), Ownership::Borrowed),
+        Type::Reference(r) => (
+            r.inner.as_ref(),
+            if r.is_mutable {
+                Ownership::BorrowedMut
+            } else {
+                Ownership::Borrowed
+            },
+        ),
         other => (other, Ownership::Owned),
     }
 }
@@ -152,12 +173,36 @@ pub fn build(discovery: &Discovery) -> Graph {
                 });
             }
 
+            // `&mut` is a fixture-only feature: a test holding a mutable borrow of
+            // a shared fixture would leak its writes into later tests.
+            if ownership == Ownership::BorrowedMut && consumer.kind == MarkerKind::Test {
+                errors.push(GraphError::MutInTest {
+                    consumer: label(ci),
+                    param: param.clone(),
+                });
+            }
+
             edges.push(Edge {
                 param: param.clone(),
                 ownership,
                 target,
             });
         }
+
+        // A `&mut` borrow must be exclusive: a consumer can't also borrow the same
+        // fixture through another parameter (the two borrows would be live at once).
+        for e in &edges {
+            if e.ownership == Ownership::BorrowedMut
+                && edges.iter().filter(|o| o.target == e.target).count() > 1
+            {
+                errors.push(GraphError::MutAlias {
+                    consumer: label(ci),
+                    param: e.param.clone(),
+                    fixture: label(e.target),
+                });
+            }
+        }
+
         nodes.push(Node { item: ci, edges });
     }
 
@@ -310,6 +355,7 @@ fn edge_tree(
 ) -> Tree<String> {
     let prefix = match edge.ownership {
         Ownership::Borrowed => "&",
+        Ownership::BorrowedMut => "&mut ",
         Ownership::Owned => "",
     };
     let label = format!(
@@ -368,6 +414,7 @@ fn push_dependents(
     for &(consumer, edge) in consumers {
         let prefix = match edge.ownership {
             Ownership::Borrowed => "&",
+            Ownership::BorrowedMut => "&mut ",
             Ownership::Owned => "",
         };
         let label = format!(
@@ -415,6 +462,18 @@ fn print_error(err: &GraphError) {
             println!(
                 "    but that fixture is shared at a broader scope; borrow it with `&` instead"
             );
+        }
+        GraphError::MutInTest { consumer, param } => {
+            println!("  error: `{param}` in {consumer} takes `&mut`, but tests may not");
+            println!("    mutably borrow fixtures; use `&mut` only in a fixture, or take `&`");
+        }
+        GraphError::MutAlias {
+            consumer,
+            param,
+            fixture,
+        } => {
+            println!("  error: `{param}` in {consumer} mutably borrows `{fixture}`,");
+            println!("    which is also borrowed by another parameter of the same consumer");
         }
         GraphError::Cycle { path } => {
             println!("  error: fixture dependency cycle: {}", path.join(" -> "));
