@@ -1,3 +1,4 @@
+mod codegen;
 mod discover;
 mod graph;
 
@@ -19,6 +20,8 @@ enum Command {
     Discover(Target),
     /// Build and validate the fixture dependency graph for a crate.
     Graph(Target),
+    /// Generate the kitest harness source for a crate (prints to stdout).
+    Generate(Target),
 }
 
 #[derive(clap::Args)]
@@ -50,6 +53,13 @@ fn main() -> Result<()> {
             } else {
                 std::process::exit(1);
             }
+        }
+        Command::Generate(t) => {
+            let discovery = discover::discover(&t.manifest_path, &t.package, &t.toolchain)?;
+            let g = graph::build(&discovery);
+            let source = codegen::generate(&discovery, &g)?;
+            print!("{source}");
+            Ok(())
         }
     }
 }
