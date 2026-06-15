@@ -14,6 +14,9 @@ rusqlite = { version = "0.32", features = ["bundled"] }
 sha2 = "0.10"
 hmac = "0.12"
 hex = "0.4"
+# Parsing the vendored Project Wycheproof HMAC-SHA256 vectors (`crypto::hmac`).
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 # Used by the crate's `#[testrs::runtime]` async bridge (see `async_runtime`).
 tokio = { version = "1", features = ["rt-multi-thread", "time"] }
 

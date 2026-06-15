@@ -1398,6 +1398,8 @@ dependencies = [
  "hex",
  "hmac",
  "rusqlite",
+ "serde",
+ "serde_json",
  "sha2",
  "testrs",
  "tokio",

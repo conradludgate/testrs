@@ -1,10 +1,10 @@
 //! Crypto test-vector suites — the data-driven pattern testrs is built for.
 //!
-//! Each suite is a `cases` provider returning a `Vec` of vectors (parsed at
-//! collection time; here inline, in practice from a `.rsp`/JSON file via
-//! `include_str!`). The test runs once per vector, so one failing vector is one
-//! failing case with its own name. The vectors are real published values: the
-//! SHA-256 examples and the HMAC-SHA256 cases from RFC 4231.
+//! Each suite is a `cases` provider returning a `Vec` of vectors; the test runs
+//! once per vector, so one failing vector is one failing case with its own name.
+//! [`sha256`] uses a handful of inline known-answer vectors, while [`hmac`] parses
+//! the real Project Wycheproof HMAC-SHA256 suite at collection time — exactly how
+//! you'd drive a test against a vendored vector file.
 
 /// SHA-256 known-answer vectors, each named by its description via `TestCaseName`.
 pub mod sha256 {
@@ -55,55 +55,108 @@ pub mod sha256 {
     }
 }
 
-/// HMAC-SHA256 vectors from RFC 4231, each named by its RFC case number.
+/// HMAC-SHA256 vectors from the Project Wycheproof suite, loaded and parsed at
+/// collection time. The whole file is checked: "valid" vectors must verify and
+/// "invalid" ones (truncated/modified tags, wrong lengths) must not. Each case is
+/// named by its Wycheproof test-case id.
+///
+/// Source: <https://github.com/C2SP/wycheproof> `testvectors_v1/hmac_sha256_test.json`
+/// (Apache-2.0). Vendored at `vectors/hmac_sha256_test.json`.
 pub mod hmac {
     use hmac::{Hmac, Mac};
+    use serde::Deserialize;
     use sha2::Sha256;
     use testrs::{TestCaseName, test};
 
     type HmacSha256 = Hmac<Sha256>;
 
+    /// The slice of the Wycheproof MAC schema we use; unknown fields are ignored.
+    #[derive(Deserialize)]
+    struct Suite {
+        #[serde(rename = "testGroups")]
+        test_groups: Vec<Group>,
+    }
+
+    #[derive(Deserialize)]
+    struct Group {
+        /// Tag length in bits; the MAC is truncated to it before comparison.
+        #[serde(rename = "tagSize")]
+        tag_size: usize,
+        tests: Vec<RawCase>,
+    }
+
+    #[derive(Deserialize)]
+    struct RawCase {
+        #[serde(rename = "tcId")]
+        tc_id: u32,
+        comment: String,
+        key: String,
+        msg: String,
+        tag: String,
+        result: String,
+    }
+
+    /// One Wycheproof vector, flattened from its group with bytes hex-decoded.
     pub struct Vector {
-        pub rfc_case: u8,
-        pub key: &'static [u8],
-        pub data: &'static [u8],
-        pub mac: &'static str,
+        pub tc_id: u32,
+        pub comment: String,
+        pub key: Vec<u8>,
+        pub msg: Vec<u8>,
+        pub expected_tag: Vec<u8>,
+        /// Expected tag length in bytes (the MAC is truncated to it).
+        pub tag_len: usize,
+        /// Whether the expected tag should verify (`result == "valid"`).
+        pub valid: bool,
     }
 
     impl TestCaseName for Vector {
         fn case_name(&self) -> String {
-            format!("rfc4231_{}", self.rfc_case)
+            format!("tc{}", self.tc_id)
         }
     }
 
+    /// Parse every vector in the vendored Wycheproof file at collection time.
+    ///
+    /// # Panics
+    /// If the embedded JSON can't be parsed or a hex field is malformed.
     pub fn vectors() -> Vec<Vector> {
-        vec![
-            Vector {
-                rfc_case: 1,
-                key: &[0x0b; 20],
-                data: b"Hi There",
-                mac: "b0344c61d8db38535ca8afceaf0bf12b881dc200c9833da726e9376c2e32cff7",
-            },
-            Vector {
-                rfc_case: 2,
-                key: b"Jefe",
-                data: b"what do ya want for nothing?",
-                mac: "5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843",
-            },
-            Vector {
-                rfc_case: 3,
-                key: &[0xaa; 20],
-                data: &[0xdd; 50],
-                mac: "773ea91e36800e46854db8ebd09181a72959098b3ef8c122d9635514ced565fe",
-            },
-        ]
+        let raw = include_str!("../vectors/hmac_sha256_test.json");
+        let suite: Suite = serde_json::from_str(raw).expect("parse wycheproof HMAC-SHA256 vectors");
+        let decode = |s: &str| hex::decode(s).expect("wycheproof fields are valid hex");
+        suite
+            .test_groups
+            .into_iter()
+            .flat_map(|group| {
+                group.tests.into_iter().map(move |case| Vector {
+                    tc_id: case.tc_id,
+                    comment: case.comment,
+                    key: decode(&case.key),
+                    msg: decode(&case.msg),
+                    expected_tag: decode(&case.tag),
+                    tag_len: group.tag_size / 8,
+                    valid: case.result == "valid",
+                })
+            })
+            .collect()
     }
 
     #[test(cases(vector = vectors))]
-    fn mac_matches(vector: &Vector) {
-        let mut mac = HmacSha256::new_from_slice(vector.key).expect("any key length is valid");
-        mac.update(vector.data);
-        let tag = mac.finalize().into_bytes();
-        assert_eq!(hex::encode(tag), vector.mac);
+    fn agrees_with_wycheproof(vector: &Vector) {
+        let mut mac = HmacSha256::new_from_slice(&vector.key).expect("HMAC accepts any key length");
+        mac.update(&vector.msg);
+        let full = mac.finalize().into_bytes();
+        let verified = full[..vector.tag_len] == vector.expected_tag[..];
+        assert_eq!(
+            verified,
+            vector.valid,
+            "tc{} ({}): expected the tag to {}",
+            vector.tc_id,
+            vector.comment,
+            if vector.valid {
+                "verify"
+            } else {
+                "be rejected"
+            },
+        );
     }
 }
