@@ -8,9 +8,10 @@
 //! graph, and generates a [`kitest`](https://docs.rs/kitest) harness — no
 //! `Arc`s, no statics, no name-based matching.
 //!
-//! This crate is the runtime surface: the [`fixture`] and [`test`] attribute
-//! macros, the [`TestCaseName`] trait, and [`TestArgs`] (used by the generated
-//! harness). Analysis and code generation live in the `testrs` CLI.
+//! This crate is the runtime surface: the [`fixture`], [`test`], and
+//! [`tear_down`](macro@tear_down) attribute macros, the [`TestCaseName`] trait,
+//! and [`TestArgs`] (used by the generated harness). Analysis and code generation
+//! live in the `testrs` CLI.
 //!
 //! # Example
 //!
@@ -49,6 +50,8 @@
 //! - [`macro@runtime`] — *(optional)* names the function that runs async
 //!   fixtures/tests to completion. Without one, testrs uses [`block_on`]
 //!   (a runtime-agnostic default); mark one to plug in tokio, async-std, etc.
+//! - [`macro@tear_down`] — *(optional)* names a function that tears a fixture
+//!   down (sync or async) when its scope ends, taking the fixture by value.
 //!
 //! A parameter's type controls how it's supplied: `&T` borrows a shared fixture
 //! from an ancestor (or the same) module; `T` takes ownership of a fresh per-test
@@ -68,7 +71,7 @@
 //!
 //! See the project README for the full guide.
 
-pub use testrs_macros::{fixture, runtime, test};
+pub use testrs_macros::{fixture, runtime, tear_down, test};
 
 /// Run a future to completion. This is the runtime-agnostic default the generated
 /// harness uses for every async fixture and test when no [`runtime`] provider is

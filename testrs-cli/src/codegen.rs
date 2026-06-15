@@ -169,7 +169,9 @@ pub fn generate(discovery: &Discovery, graph: &Graph) -> Result<String> {
         })
         .collect();
 
-    // `teardown_scope` arms: drop a scope's fixtures (reverse topo) on leaving it.
+    // `teardown_scope` arms: tear a scope's fixtures down (reverse topo) on leaving
+    // it. A fixture with a `#[tear_down]` is taken out and passed (by value) to its
+    // teardown function — through the runtime bridge if it's async; the rest drop.
     let scopes: BTreeSet<String> = store_fixtures
         .iter()
         .map(|&i| scope_key(&discovery.items[i].module_path))
@@ -177,18 +179,56 @@ pub fn generate(discovery: &Discovery, graph: &Graph) -> Result<String> {
     let teardown_arms: Vec<TokenStream> = scopes
         .iter()
         .map(|scope| {
-            let nones: Vec<TokenStream> = store_fixtures
+            let stmts: Vec<TokenStream> = store_fixtures
                 .iter()
                 .rev()
                 .filter(|&&fi| scope_key(&discovery.items[fi].module_path) == *scope)
                 .map(|&fi| {
                     let f = field_ident(discovery, fi);
-                    quote! { c.#f = None; }
+                    if let Some(&tdi) = graph.teardowns.get(&fi) {
+                        let td = &discovery.tear_downs[tdi];
+                        let call: TokenStream = td.call.parse().expect("valid teardown path");
+                        let invoke = if td.is_async {
+                            quote! { #block_on(#call(v)) }
+                        } else {
+                            quote! { #call(v) }
+                        };
+                        quote! {
+                            if let Some(v) = FIXTURES.with(|c| c.borrow_mut().#f.take()) {
+                                #invoke;
+                            }
+                        }
+                    } else {
+                        quote! { FIXTURES.with(|c| c.borrow_mut().#f = None); }
+                    }
                 })
                 .collect();
-            quote! { #scope => { #(#nones)* } }
+            quote! { #scope => { #(#stmts)* } }
         })
         .collect();
+
+    // A `#[tear_down]` isn't `Drop`, so scopes still active when the run ends must
+    // be torn down explicitly (the thread-local `Drop` at exit only drops values).
+    let any_teardown = store_fixtures
+        .iter()
+        .any(|&fi| graph.teardowns.contains_key(&fi));
+    // Scopes deepest-first, so a scope is torn down before any it depends on.
+    let mut teardown_order: Vec<&String> = scopes.iter().collect();
+    teardown_order.sort_by_key(|s| std::cmp::Reverse(s.matches("::").count()));
+    let teardown_all = if any_teardown {
+        quote! {
+            fn teardown_all() {
+                #(teardown_scope(#teardown_order);)*
+            }
+        }
+    } else {
+        quote! {}
+    };
+    let final_teardown = if any_teardown {
+        quote! { teardown_all(); }
+    } else {
+        quote! {}
+    };
 
     // Each group's ancestor scope chain (kept active even when unused, so a
     // shared scope isn't torn down by a sibling that doesn't need it).
@@ -246,14 +286,13 @@ pub fn generate(discovery: &Discovery, graph: &Graph) -> Result<String> {
         }
 
         fn teardown_scope(scope: &str) {
-            FIXTURES.with(|c| {
-                let mut c = c.borrow_mut();
-                match scope {
-                    #(#teardown_arms)*
-                    _ => {}
-                }
-            });
+            match scope {
+                #(#teardown_arms)*
+                _ => {}
+            }
         }
+
+        #teardown_all
 
         fn common_prefix(a: &[&str], b: &[&str]) -> usize {
             a.iter().zip(b).take_while(|(x, y)| x == y).count()
@@ -306,7 +345,7 @@ pub fn generate(discovery: &Discovery, graph: &Graph) -> Result<String> {
             }
             let selected: Vec<_> =
                 all.into_iter().filter(|t| args.matches(&t.meta.name)).collect();
-            kitest::harness(&selected)
+            let code = kitest::harness(&selected)
                 .with_grouper(|m: &TestMeta<&'static str>| m.extra)
                 .with_groups(kitest::group::TestGroupBTreeMap::new())
                 .with_group_runner(FixtureRunner {
@@ -314,7 +353,11 @@ pub fn generate(discovery: &Discovery, graph: &Graph) -> Result<String> {
                 })
                 .with_runner(SimpleRunner::default())
                 .run()
-                .exit_code()
+                .exit_code();
+            // Tear down scopes still active at the end of the run (async teardown
+            // can't ride the synchronous thread-local `Drop`).
+            #final_teardown
+            code
         }
     };
 

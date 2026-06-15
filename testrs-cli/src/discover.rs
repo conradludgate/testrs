@@ -97,6 +97,19 @@ pub struct Discovered {
     pub should_panic: ShouldPanic,
 }
 
+/// A `#[tear_down]` function: cleanup for the fixture it consumes by value, run
+/// (sync or async) when that fixture's scope ends.
+pub struct TearDown {
+    /// Module path of the teardown function, for scope resolution.
+    pub module_path: Vec<String>,
+    /// The fixture type it tears down — its sole, by-value parameter.
+    pub subject: Type,
+    /// Fully-qualified call path, e.g. `crate_name::sqlite::session::drop_events`.
+    pub call: String,
+    /// Whether it's async (driven through the `#[runtime]` bridge).
+    pub is_async: bool,
+}
+
 /// A direct (external) dependency of the analyzed crate. Used to add it to the
 /// ephemeral harness when a shared fixture or case type names it.
 pub struct ExternalDep {
@@ -126,6 +139,8 @@ pub struct Discovery {
     /// Fully-qualified path of the `#[runtime]` async bridge, if the crate marks
     /// one (e.g. `crate_name::module::rt`). `None` falls back to `testrs::block_on`.
     pub runtime_call: Option<String>,
+    /// `#[tear_down]` functions, each linked to a fixture by the graph.
+    pub tear_downs: Vec<TearDown>,
     pub items: Vec<Discovered>,
 }
 
@@ -136,6 +151,8 @@ enum ParsedMarker {
     Item(MarkerKind, Vec<(String, syn::Path)>, ShouldPanic),
     /// The `#[runtime]` async-bridge provider.
     Runtime,
+    /// A `#[tear_down]` function.
+    TearDown,
 }
 
 /// The testrs marker on an item: its kind, plus any `cases(param = provider)`
@@ -163,6 +180,7 @@ fn parse_marker(attrs: &[Attribute]) -> Option<ParsedMarker> {
                 "fixture" => MarkerKind::Fixture,
                 "test" => MarkerKind::Test,
                 "runtime" => return Some(ParsedMarker::Runtime),
+                "tear_down" => return Some(ParsedMarker::TearDown),
                 _ => return None,
             };
 
@@ -344,6 +362,7 @@ pub fn discover(manifest_path: &Path, package: &str, toolchain: &str) -> Result<
     let crate_name = krate.crate_name();
     let mut items = Vec::new();
     let mut runtime_call: Option<String> = None;
+    let mut tear_downs: Vec<TearDown> = Vec::new();
     for (id, item) in index {
         if !matches!(item.inner, ItemEnum::Function(_)) {
             continue;
@@ -361,6 +380,42 @@ pub fn discover(manifest_path: &Path, package: &str, toolchain: &str) -> Result<
                 if runtime_call.replace(segments.join("::")).is_some() {
                     bail!("multiple `#[testrs::runtime]` functions found; only one is allowed");
                 }
+                continue;
+            }
+            Some(ParsedMarker::TearDown) => {
+                // A teardown function: not a graph node — it consumes a fixture by
+                // value when that fixture's scope ends. Record its subject type so
+                // the graph can link it to the fixture it tears down.
+                let name = item.name.clone().unwrap_or_default();
+                let module = module_path.get(id).cloned().unwrap_or_default();
+                let func = resolve_free_function(
+                    item,
+                    krate,
+                    &collection,
+                    TypeAliasResolution::ResolveThrough,
+                )
+                .map_err(|e| anyhow!("resolving teardown `{name}`: {e:?}"))?;
+                let inputs = &func.header.inputs;
+                if inputs.len() != 1 {
+                    bail!(
+                        "`#[tear_down]` `{name}` must take exactly one parameter (the fixture it tears down)"
+                    );
+                }
+                if matches!(inputs[0].type_, Type::Reference(_)) {
+                    bail!(
+                        "`#[tear_down]` `{name}` must take its fixture by value, not by reference"
+                    );
+                }
+                let subject = inputs[0].type_.clone();
+                let mut segments = vec![crate_name.clone()];
+                segments.extend(module.clone());
+                segments.push(name);
+                tear_downs.push(TearDown {
+                    module_path: module,
+                    subject,
+                    call: segments.join("::"),
+                    is_async: func.header.is_async,
+                });
                 continue;
             }
             None => continue,
@@ -484,6 +539,7 @@ pub fn discover(manifest_path: &Path, package: &str, toolchain: &str) -> Result<
         testrs_manifest_dir,
         dependencies,
         runtime_call,
+        tear_downs,
         items,
     })
 }
@@ -518,5 +574,12 @@ pub fn print_discovery(discovery: &Discovery) {
             Some(ty) => println!("    -> {ty:?}"),
             None => println!("    -> ()"),
         }
+    }
+    for td in &discovery.tear_downs {
+        let asyncness = if td.is_async { " async" } else { "" };
+        println!(
+            "\n[tear_down]{asyncness} {}  (tears down: {:?})",
+            td.call, td.subject
+        );
     }
 }

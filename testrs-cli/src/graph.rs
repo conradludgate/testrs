@@ -69,12 +69,38 @@ pub enum GraphError {
     Cycle {
         path: Vec<String>,
     },
+    /// A `#[tear_down]` whose subject type has no fixture in scope.
+    TearDownMissing {
+        teardown: String,
+        ty: Type,
+    },
+    /// Two or more fixtures produce a teardown's subject type at the same scope.
+    TearDownAmbiguous {
+        teardown: String,
+        candidates: Vec<String>,
+    },
+    /// A fixture has more than one `#[tear_down]`.
+    TearDownDuplicate {
+        fixture: String,
+        first: String,
+        second: String,
+    },
+    /// A consumer takes a teardown'd fixture by value — that fixture is shared and
+    /// consumed by its teardown, so it can't also be owned by a test/fixture.
+    TearDownOwned {
+        consumer: String,
+        param: String,
+        fixture: String,
+        teardown: String,
+    },
 }
 
 pub struct Graph {
     pub nodes: Vec<Node>,
     /// Setup order for fixtures (indices into [`Discovery::items`]).
     pub fixture_order: Vec<usize>,
+    /// Fixture item index → index into [`Discovery::tear_downs`] of its teardown.
+    pub teardowns: HashMap<usize, usize>,
     pub errors: Vec<GraphError>,
 }
 
@@ -206,6 +232,66 @@ pub fn build(discovery: &Discovery) -> Graph {
         nodes.push(Node { item: ci, edges });
     }
 
+    // Link each `#[tear_down]` to the fixture it consumes, by its subject type —
+    // the closest ancestor-or-equal fixture producing that type, like a consumer.
+    let mut teardowns: HashMap<usize, usize> = HashMap::new();
+    for (tdi, td) in discovery.tear_downs.iter().enumerate() {
+        let in_scope: Vec<usize> = by_type
+            .get(&td.subject)
+            .map_or(&[][..], Vec::as_slice)
+            .iter()
+            .copied()
+            .filter(|&fi| is_ancestor_or_equal(&items[fi].module_path, &td.module_path))
+            .collect();
+        if in_scope.is_empty() {
+            errors.push(GraphError::TearDownMissing {
+                teardown: td.call.clone(),
+                ty: td.subject.clone(),
+            });
+            continue;
+        }
+        let max_depth = in_scope
+            .iter()
+            .map(|&fi| items[fi].module_path.len())
+            .max()
+            .unwrap();
+        let closest: Vec<usize> = in_scope
+            .into_iter()
+            .filter(|&fi| items[fi].module_path.len() == max_depth)
+            .collect();
+        if closest.len() > 1 {
+            errors.push(GraphError::TearDownAmbiguous {
+                teardown: td.call.clone(),
+                candidates: closest.iter().map(|&fi| label(fi)).collect(),
+            });
+            continue;
+        }
+        if let Some(prev) = teardowns.insert(closest[0], tdi) {
+            errors.push(GraphError::TearDownDuplicate {
+                fixture: label(closest[0]),
+                first: discovery.tear_downs[prev].call.clone(),
+                second: td.call.clone(),
+            });
+        }
+    }
+
+    // A teardown'd fixture is shared and consumed by its teardown at scope end, so
+    // a test/fixture can't also take it by value — that mixes the two policies.
+    for node in &nodes {
+        for edge in &node.edges {
+            if edge.ownership == Ownership::Owned
+                && let Some(&tdi) = teardowns.get(&edge.target)
+            {
+                errors.push(GraphError::TearDownOwned {
+                    consumer: label(node.item),
+                    param: edge.param.clone(),
+                    fixture: label(edge.target),
+                    teardown: discovery.tear_downs[tdi].call.clone(),
+                });
+            }
+        }
+    }
+
     let (fixture_order, cycle) = topo_sort_fixtures(discovery, &nodes);
     if let Some(path) = cycle {
         errors.push(GraphError::Cycle {
@@ -216,6 +302,7 @@ pub fn build(discovery: &Discovery) -> Graph {
     Graph {
         nodes,
         fixture_order,
+        teardowns,
         errors,
     }
 }
@@ -477,6 +564,38 @@ fn print_error(err: &GraphError) {
         }
         GraphError::Cycle { path } => {
             println!("  error: fixture dependency cycle: {}", path.join(" -> "));
+        }
+        GraphError::TearDownMissing { teardown, ty } => {
+            println!("  error: `#[tear_down]` {teardown} takes `{ty:?}`,");
+            println!("    but no fixture in scope produces it");
+        }
+        GraphError::TearDownAmbiguous {
+            teardown,
+            candidates,
+        } => {
+            println!(
+                "  error: `#[tear_down]` {teardown} matches multiple fixtures at the same scope"
+            );
+            println!("    candidates: {}", candidates.join(", "));
+        }
+        GraphError::TearDownDuplicate {
+            fixture,
+            first,
+            second,
+        } => {
+            println!("  error: {fixture} has more than one `#[tear_down]`");
+            println!("    found: {first}, {second}");
+        }
+        GraphError::TearDownOwned {
+            consumer,
+            param,
+            fixture,
+            teardown,
+        } => {
+            println!("  error: `{param}` in {consumer} takes `{fixture}` by value,");
+            println!(
+                "    but it has a teardown ({teardown}); a teardown'd fixture is shared — borrow it with `&`"
+            );
         }
     }
 }

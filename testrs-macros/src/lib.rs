@@ -96,3 +96,17 @@ pub fn test(attr: TokenStream, item: TokenStream) -> TokenStream {
 pub fn runtime(attr: TokenStream, item: TokenStream) -> TokenStream {
     mark("runtime", attr, item)
 }
+
+/// Marks a function as the teardown for the fixture it takes by value. testrs runs
+/// it — synchronous or `async` (driven through the [`runtime`] bridge) — when that
+/// fixture's scope ends, instead of dropping the value. It must take exactly one
+/// parameter, the fixture, by value:
+///
+/// ```ignore
+/// #[testrs::tear_down]
+/// async fn close(db: Database) { db.pool.close().await; }
+/// ```
+#[proc_macro_attribute]
+pub fn tear_down(attr: TokenStream, item: TokenStream) -> TokenStream {
+    mark("tear_down", attr, item)
+}
