@@ -107,8 +107,9 @@ pub struct Discovered {
     pub cases: Vec<CaseParam>,
     /// Panic expectation for a test.
     pub should_panic: ShouldPanic,
-    /// Conditional run-time skip, if the test has `#[skip(...)]`.
-    pub skip: Option<Skip>,
+    /// Conditional run-time skips, one per `#[skip(...)]` (the test skips on the
+    /// first whose condition holds). Empty for tests without `#[skip]`.
+    pub skip: Vec<Skip>,
 }
 
 /// A `#[tear_down]` function: cleanup for the fixture it consumes by value, run
@@ -177,8 +178,9 @@ struct Markers {
     cases: Vec<(String, syn::Path)>,
     /// `panics` / `panics("msg")`.
     should_panic: ShouldPanic,
-    /// `skip(cond = predicate, reason = "...")`: the predicate path and reason.
-    skip: Option<(syn::Path, Option<String>)>,
+    /// `skip(cond = predicate, reason = "...")` markers (one per `#[skip]`): each
+    /// is the predicate path and its reason.
+    skip: Vec<(syn::Path, Option<String>)>,
 }
 
 /// Collect every `#[diagnostic::testrs::*]` marker on an item into one [`Markers`].
@@ -258,7 +260,7 @@ fn parse_markers(attrs: &[Attribute]) -> Markers {
                             }
                         }
                         if let Some(cond) = cond {
-                            markers.skip = Some((cond, reason));
+                            markers.skip.push((cond, reason));
                         }
                     }
                 }
@@ -442,7 +444,7 @@ pub fn discover(manifest_path: &Path, package: &str, toolchain: &str) -> Result<
         }
         let has_modifiers = !markers.cases.is_empty()
             || markers.should_panic != ShouldPanic::No
-            || markers.skip.is_some();
+            || !markers.skip.is_empty();
         let kind = match markers.primary {
             Some(Primary::Test) => MarkerKind::Test,
             Some(Primary::Fixture) => MarkerKind::Fixture,
@@ -553,18 +555,21 @@ pub fn discover(manifest_path: &Path, package: &str, toolchain: &str) -> Result<
             });
         }
 
-        // Resolve the `#[skip]` predicate path (relative to the test's module) to
+        // Resolve each `#[skip]` predicate path (relative to the test's module) to
         // its fully-qualified call path, like a `cases` provider.
-        let skip = raw_skip.map(|(cond_path, reason)| {
-            let (smod, sname) = provider_location(&cond_path, &test_module);
-            let mut segments = vec![crate_name.clone()];
-            segments.extend(smod);
-            segments.push(sname);
-            Skip {
-                call: segments.join("::"),
-                reason,
-            }
-        });
+        let skip = raw_skip
+            .into_iter()
+            .map(|(cond_path, reason)| {
+                let (smod, sname) = provider_location(&cond_path, &test_module);
+                let mut segments = vec![crate_name.clone()];
+                segments.extend(smod);
+                segments.push(sname);
+                Skip {
+                    call: segments.join("::"),
+                    reason,
+                }
+            })
+            .collect();
 
         items.push(Discovered {
             kind,

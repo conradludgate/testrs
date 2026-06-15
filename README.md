@@ -285,15 +285,17 @@ pytest's `skipif`):
 
 ```rust
 #[test]
-#[skip(if = ticket.id.is_multiple_of(2), reason = "even ids can't be exercised")]
+#[skip(ticket.id.is_multiple_of(2), reason = "even ids can't be exercised")]
 fn processes_odd_ticket(ticket: &Ticket) { /* only runs when the id is odd */ }
 ```
 
-`reason` is optional (it defaults to the condition's source text). Because the
-condition runs with the fixtures, it can read their private members — it lives in
-your crate, not the generated harness. Under `--nextest`, where each test is its
-own process, a skipped test still exits cleanly and so shows as passed rather than
-ignored (nextest decides "skipped" before running).
+`reason` is optional (it defaults to the condition's source text). A test may carry
+several `#[skip]`s — it skips on the first whose condition holds, reporting that
+one's reason. Because the condition runs with the fixtures, it can read their
+private members — it lives in your crate, not the generated harness. Under
+`--nextest`, where each test is its own process, a skipped test still exits cleanly
+and so shows as passed rather than ignored (nextest decides "skipped" before
+running).
 
 ### Run under cargo-nextest
 
@@ -327,7 +329,7 @@ $ testrs generate my-tests          # print the generated harness source (for de
 | `#[cases(p = expr, ...)]` | *(on a test)* Data-driven test; runs over the cartesian product of the bindings. Each `expr` is an `IntoIterator`, and each `p` is a `&T` parameter. |
 | `#[panics]` | *(on a test)* The test is expected to panic. |
 | `#[panics("msg")]` | …and its panic message must contain `"msg"`. |
-| `#[skip(if = expr, reason = "...")]` | *(on a test)* Skip at run time (reported *ignored*) when `expr`, evaluated with the test's fixtures, is `true`. `reason` is optional. |
+| `#[skip(expr, reason = "...")]` | *(on a test)* Skip at run time (reported *ignored*) when `expr`, evaluated with the test's fixtures, is `true`. `reason` is optional; may be repeated (skips on the first match). |
 
 `#[cases]`, `#[panics]`, and `#[skip]` are sibling attributes written next to
 `#[test]`. The fixture/test macros leave the function body unchanged and promote it
@@ -478,8 +480,8 @@ Not yet supported (contributions/ideas welcome):
 - Case expressions that are `async` or use fixtures (they run at collection time,
   before any fixtures exist).
 - Per-case expansion is not yet pruned when nextest runs a single case.
-- Static `#[ignore]` (unconditional skip; the runtime `#[skip(if = ...)]` is
-  supported), tags/filtering by tag, property testing, shuffling/sharding/seeds.
+- Static `#[ignore]` (unconditional skip; the runtime `#[skip(...)]` is supported),
+  tags/filtering by tag, property testing, shuffling/sharding/seeds.
 
 ## License
 

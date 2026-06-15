@@ -118,11 +118,12 @@ pub fn panics(attr: TokenStream, item: TokenStream) -> TokenStream {
     modifier("panics", attr, item)
 }
 
-/// Conditionally skip a test based on its fixtures: `#[skip(if = EXPR, reason =
-/// "...")]`. `EXPR` is a `bool` expression that may name the test's parameters; it
-/// is evaluated at run time with the test's fixtures, and if it's `true` the test
-/// is reported ignored instead of run (think pytest's `skipif`). `reason` is
-/// optional (it defaults to the condition's source text). Used alongside `#[test]`.
+/// Conditionally skip a test based on its fixtures: `#[skip(EXPR, reason = "...")]`.
+/// `EXPR` is a `bool` expression that may name the test's parameters; it is
+/// evaluated at run time with the test's fixtures, and if it's `true` the test is
+/// reported ignored instead of run (think pytest's `skipif`). `reason` is optional
+/// (it defaults to the condition's source text). A test may carry several `#[skip]`
+/// attributes — it skips on the first whose condition holds. Used alongside `#[test]`.
 #[proc_macro_attribute]
 pub fn skip(attr: TokenStream, item: TokenStream) -> TokenStream {
     skip::expand(attr.into(), &item.into()).into()

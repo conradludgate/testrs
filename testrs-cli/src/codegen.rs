@@ -245,7 +245,7 @@ pub fn generate(discovery: &Discovery, graph: &Graph) -> Result<String> {
     // marker a skipped test returns to `TestStatus::Ignored`. It is otherwise
     // identical to kitest's `DefaultPanicHandler` (which we can't reuse, since it
     // turns every `Ok(Some(_))` into `Other`), so non-skipped tests are unaffected.
-    let any_skip = discovery.items.iter().any(|i| i.skip.is_some());
+    let any_skip = discovery.items.iter().any(|i| !i.skip.is_empty());
     let skip_support = if any_skip {
         quote! {
             #[derive(Debug, Clone, PartialEq)]

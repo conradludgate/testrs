@@ -49,8 +49,9 @@
 //!   - [`macro@cases`] — `#[cases(p = expr, ...)]`, data-driven tests (one run per
 //!     element of the case expressions' cartesian product).
 //!   - [`macro@panics`] — `#[panics]` / `#[panics("msg")]`, expects a panic.
-//!   - [`macro@skip`] — `#[skip(if = expr, reason = "...")]`, skips the test at run
-//!     time (reported ignored) when `expr`, evaluated with its fixtures, is `true`.
+//!   - [`macro@skip`] — `#[skip(expr, reason = "...")]`, skips the test at run time
+//!     (reported ignored) when `expr`, evaluated with its fixtures, is `true`. May
+//!     be repeated; the test skips on the first condition that holds.
 //! - [`macro@runtime`] — *(optional)* names the function that runs async
 //!   fixtures/tests to completion. Without one, testrs uses [`block_on`]
 //!   (a runtime-agnostic default); mark one to plug in tokio, async-std, etc.

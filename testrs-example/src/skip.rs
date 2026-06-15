@@ -6,11 +6,12 @@
 //! so would passing (you tested nothing) — so you skip, and the test is reported
 //! *ignored*.
 //!
-//! `#[skip(if = EXPR, reason = "...")]` expresses exactly that. `EXPR` is a `bool`
+//! `#[skip(EXPR, reason = "...")]` expresses exactly that. `EXPR` is a `bool`
 //! expression evaluated with the test's fixtures; here it stands in for "the
 //! service handed back something we can't test against". This example is contrived
-//! on purpose — a `Ticket` fixture carries a pseudo-random id, and the test skips
-//! when it's even — so roughly half of all runs report this test as ignored.
+//! on purpose — a `Ticket` fixture carries a random id, and the test skips when it
+//! can't be exercised. A test may stack several `#[skip]`s; it skips on the first
+//! whose condition holds, so the two below cover even ids and multiples of three.
 
 use testrs::{fixture, skip, test};
 
@@ -22,21 +23,19 @@ pub struct Ticket {
 
 #[fixture]
 fn ticket() -> Ticket {
-    use std::hash::BuildHasher;
-    // A "random enough" id without pulling in a dependency: the std `HashMap` seed
-    // is randomized per construction (from the OS), so hashing a constant with a
-    // fresh one yields an unpredictable value. Even ids stand in for "can't
-    // exercise this one".
-    let id = std::collections::hash_map::RandomState::new().hash_one(0u8);
-    Ticket { id }
+    // Stand-in for a value the service hands back; we can't predict it.
+    Ticket {
+        id: rand::random::<u64>(),
+    }
 }
 
 #[test]
-#[skip(if = ticket.id.is_multiple_of(2), reason = "even ticket ids can't be exercised")]
+#[skip(ticket.id.is_multiple_of(2), reason = "even ticket ids can't be exercised")]
+#[skip(ticket.id.is_multiple_of(3), reason = "ids divisible by three are quarantined")]
 fn processes_odd_ticket(ticket: &Ticket) {
-    // Only reached when the skip condition above was false, so the id is odd.
+    // Only reached when both skip conditions above were false.
     assert!(
-        !ticket.id.is_multiple_of(2),
-        "skip should have spared even ids"
+        !ticket.id.is_multiple_of(2) && !ticket.id.is_multiple_of(3),
+        "skip should have spared this id"
     );
 }
