@@ -15,11 +15,19 @@
 //! #![allow(unknown_or_malformed_diagnostic_attributes)]
 //! ```
 
+// unsynn's combinator parsers return `Result<_, unsynn::Error>`, and its `Error`
+// is large; that's unsynn's type, not ours, and these parsers are never on a hot
+// path, so the perf concern doesn't apply.
+#![allow(clippy::result_large_err)]
+
 use std::collections::HashMap;
 
 use proc_macro::TokenStream;
-use proc_macro2::{Delimiter, Group, Ident, Spacing, Span, TokenStream as TokenStream2, TokenTree};
+use proc_macro2::{Delimiter, Group, Ident, Span, TokenStream as TokenStream2, TokenTree};
 use quote::{format_ident, quote};
+// unsynn is designed to be glob-imported (combinators, operator names, traits).
+#[allow(clippy::wildcard_imports)]
+use unsynn::*;
 
 /// Emit the annotated function, prefixed with a
 /// `#[diagnostic::testrs::<kind>(<args>)]` marker carrying the macro's arguments.
@@ -81,136 +89,140 @@ fn mark(kind: &str, attr: TokenStream, item: TokenStream) -> TokenStream {
     .into()
 }
 
-/// Extract `(param, expr)` from each `param = EXPR` in a `cases(...)` argument.
-/// Bindings are split on commas at angle-bracket depth 0, so an EXPR with generic
-/// commas (`foo::<A, B>()`) stays intact.
-fn cases_bindings(args: &TokenStream2) -> Vec<(Ident, TokenStream2)> {
-    let mut iter = args.clone().into_iter().peekable();
-    let mut inner = None;
-    while let Some(tt) = iter.next() {
-        if matches!(&tt, TokenTree::Ident(id) if *id == "cases")
-            && let Some(TokenTree::Group(g)) = iter.peek()
-            && g.delimiter() == Delimiter::Parenthesis
-        {
-            inner = Some(g.stream());
-            break;
-        }
+// The `fn` keyword, for the signature grammar.
+keyword! { KwFn = "fn"; }
+
+// Grammars for the parts of `#[test(cases(...))]` we parse with unsynn. Each item
+// ends with an optional `,` separator (a trailing comma is stripped first, see
+// `parse_items`), so items split without a dangling delimiter.
+unsynn! {
+    /// `param = EXPR`. The expression runs up to the start of the next binding — a
+    /// comma followed by `IDENT =`. A comma *not* followed by that (e.g. inside a
+    /// turbofish `::<A, B>`) is consumed as part of the expression, not a separator.
+    struct CaseBinding {
+        param: Ident,
+        _eq: Assign,
+        expr: Many<Cons<Except<NextBinding>, TokenTree>>,
+        _sep: Optional<Comma>,
     }
-    let Some(inner) = inner else {
+
+    /// Look-ahead for the start of the next binding: `, IDENT =`.
+    struct NextBinding {
+        _comma: Comma,
+        _param: Ident,
+        _eq: Assign,
+    }
+
+    /// `pattern: TYPE` — one function parameter. unsynn matches the separating `:`
+    /// (a lone `Colon`, distinct from a path's `::`); testrs forbids generic
+    /// parameter types, so a plain comma always ends the type.
+    struct SigParam {
+        pattern: Many<Cons<Except<Colon>, TokenTree>>,
+        _colon: Colon,
+        ty: Many<Cons<Except<Comma>, TokenTree>>,
+        _sep: Optional<Comma>,
+    }
+
+    /// `… fn NAME(params) …` — skip attributes / visibility / qualifiers up to the
+    /// `fn` keyword, then capture the name and parameter list. testrs tests aren't
+    /// generic, so the parameters follow the name directly.
+    struct FnHeader {
+        _prefix: Many<Cons<Except<KwFn>, TokenTree>>,
+        _fn: KwFn,
+        name: Ident,
+        params: ParenthesisGroupContaining<Vec<SigParam>>,
+    }
+}
+
+/// Extract `(param, expr)` from each `param = EXPR` in a `cases(...)` argument.
+fn cases_bindings(args: &TokenStream2) -> Vec<(Ident, TokenStream2)> {
+    let Some(inner) = group_after("cases", args) else {
         return Vec::new();
     };
-
-    let mut bindings = Vec::new();
-    for chunk in split_top_level_commas(inner) {
-        // `param = EXPR`: the first `=` separates them (the param is a bare ident).
-        let Some(eq) = chunk
-            .iter()
-            .position(|t| matches!(t, TokenTree::Punct(p) if p.as_char() == '='))
-        else {
-            continue;
-        };
-        let Some(TokenTree::Ident(param)) = chunk[..eq]
-            .iter()
-            .find(|t| matches!(t, TokenTree::Ident(_)))
-            .cloned()
-        else {
-            continue;
-        };
-        bindings.push((param, chunk[eq + 1..].iter().cloned().collect()));
-    }
-    bindings
+    parse_items::<CaseBinding>(inner)
+        .into_iter()
+        .map(|b| (b.param, b.expr.to_token_stream()))
+        .collect()
 }
 
 /// The test's name and a map from parameter name to its *element* type tokens
-/// (the parameter type with a leading `&`/lifetime stripped). testrs tests are
-/// never generic, so the parameters are the first top-level parenthesised group
-/// after `fn <name>`.
+/// (the parameter type with a leading `&`/lifetime stripped).
 fn parse_signature(item: &TokenStream2) -> (Ident, HashMap<String, TokenStream2>) {
-    let tokens: Vec<TokenTree> = item.clone().into_iter().collect();
-    let mut name = Ident::new("unknown", Span::call_site());
-    let mut params = TokenStream2::new();
-    for (i, tt) in tokens.iter().enumerate() {
-        if matches!(tt, TokenTree::Ident(id) if *id == "fn") {
-            if let Some(TokenTree::Ident(n)) = tokens.get(i + 1) {
-                name = n.clone();
-            }
-            if let Some(TokenTree::Group(g)) = tokens[i + 2..].iter().find(
-                |t| matches!(t, TokenTree::Group(g) if g.delimiter() == Delimiter::Parenthesis),
-            ) {
-                params = g.stream();
-            }
-            break;
-        }
-    }
-
     let mut types = HashMap::new();
-    for param in split_top_level_commas(params) {
-        // `pattern : type` — the separating colon is a lone `:` (paths use `::`).
-        let Some(colon) = param.iter().position(|t| {
-            matches!(t, TokenTree::Punct(p) if p.as_char() == ':' && p.spacing() == Spacing::Alone)
-        }) else {
-            continue;
-        };
+    let mut iter = item.clone().to_token_iter();
+    let Ok(header) = FnHeader::parse(&mut iter) else {
+        return (Ident::new("unknown", Span::call_site()), types);
+    };
+    for param in header.params.content {
         // The binding name is the last ident of the pattern (skips `mut`/`ref`).
-        if let Some(TokenTree::Ident(pname)) = param[..colon]
-            .iter()
-            .rev()
-            .find(|t| matches!(t, TokenTree::Ident(_)))
-        {
-            types.insert(pname.to_string(), element_type(&param[colon + 1..]));
+        if let Some(name) = last_ident(&param.pattern.to_token_stream()) {
+            types.insert(name, element_type(param.ty.to_token_stream()));
         }
     }
-    (name, types)
+    (header.name, types)
 }
 
-/// Split a token stream on commas at angle-bracket depth 0, so commas inside
-/// generic arguments (`HashMap<K, V>`) don't split. Groups are atomic, so their
-/// contents are never seen here; `->` is not treated as a closing `>`.
-fn split_top_level_commas(stream: TokenStream2) -> Vec<Vec<TokenTree>> {
-    let mut chunks = Vec::new();
-    let mut current = Vec::new();
-    let mut depth = 0i32;
-    let mut prev_joint_dash = false;
-    for tt in stream {
-        match &tt {
-            TokenTree::Punct(p) if p.as_char() == '<' => depth += 1,
-            TokenTree::Punct(p) if p.as_char() == '>' && !prev_joint_dash => {
-                depth = (depth - 1).max(0);
-            }
-            TokenTree::Punct(p) if p.as_char() == ',' && depth == 0 => {
-                chunks.push(std::mem::take(&mut current));
-                prev_joint_dash = false;
-                continue;
-            }
-            _ => {}
+/// Parse the comma-separated `T`s of a token stream. A trailing comma is stripped
+/// first so the final item parses like the others (each `T` ends with an
+/// `Optional<Comma>`); an empty or unparseable stream yields no items.
+fn parse_items<T: Parse>(inner: TokenStream2) -> Vec<T> {
+    let mut toks: Vec<TokenTree> = inner.into_iter().collect();
+    if matches!(toks.last(), Some(TokenTree::Punct(p)) if p.as_char() == ',') {
+        toks.pop();
+    }
+    if toks.is_empty() {
+        return Vec::new();
+    }
+    toks.into_iter()
+        .collect::<TokenStream2>()
+        .to_token_iter()
+        .parse_all::<Vec<T>>()
+        .unwrap_or_default()
+}
+
+/// The token stream of the parenthesised group immediately following `ident`.
+fn group_after(ident: &str, args: &TokenStream2) -> Option<TokenStream2> {
+    let mut iter = args.clone().into_iter().peekable();
+    while let Some(tt) = iter.next() {
+        if matches!(&tt, TokenTree::Ident(id) if *id == ident)
+            && let Some(TokenTree::Group(g)) = iter.peek()
+            && g.delimiter() == Delimiter::Parenthesis
+        {
+            return Some(g.stream());
         }
-        prev_joint_dash = matches!(&tt, TokenTree::Punct(p)
-            if p.as_char() == '-' && p.spacing() == Spacing::Joint);
-        current.push(tt);
     }
-    if !current.is_empty() {
-        chunks.push(current);
-    }
-    chunks
+    None
+}
+
+/// The last identifier in a token stream — a parameter pattern's binding name.
+fn last_ident(ts: &TokenStream2) -> Option<String> {
+    ts.clone()
+        .into_iter()
+        .filter_map(|tt| match tt {
+            TokenTree::Ident(id) => Some(id.to_string()),
+            _ => None,
+        })
+        .last()
 }
 
 /// Strip a leading `&`, optional lifetime, and optional `mut` from a parameter
 /// type, leaving the element type (`&Vector` → `Vector`).
-fn element_type(ty: &[TokenTree]) -> TokenStream2 {
+fn element_type(ty: TokenStream2) -> TokenStream2 {
+    let toks: Vec<TokenTree> = ty.into_iter().collect();
     let mut i = 0;
-    if matches!(ty.first(), Some(TokenTree::Punct(p)) if p.as_char() == '&') {
+    if matches!(toks.first(), Some(TokenTree::Punct(p)) if p.as_char() == '&') {
         i += 1;
-        if matches!(ty.get(i), Some(TokenTree::Punct(p)) if p.as_char() == '\'') {
+        if matches!(toks.get(i), Some(TokenTree::Punct(p)) if p.as_char() == '\'') {
             i += 1;
-            if matches!(ty.get(i), Some(TokenTree::Ident(_))) {
+            if matches!(toks.get(i), Some(TokenTree::Ident(_))) {
                 i += 1;
             }
         }
-        if matches!(ty.get(i), Some(TokenTree::Ident(id)) if *id == "mut") {
+        if matches!(toks.get(i), Some(TokenTree::Ident(id)) if *id == "mut") {
             i += 1;
         }
     }
-    ty[i..].iter().cloned().collect()
+    toks[i..].iter().cloned().collect()
 }
 
 /// Rewrite a `cases(param = EXPR, ...)` group, replacing each expression with its
