@@ -10,7 +10,62 @@ use std::borrow::Cow;
 use kitest::Whatever;
 use kitest::outcome::{TestFailure, TestStatus};
 use kitest::panic::{PanicExpectation, TestPanicHandler};
-use kitest::test::{TestMeta, TestResult};
+use kitest::test::{Test, TestFnHandle, TestMeta, TestResult};
+
+/// Build a test from its display name, group key, and body closure — the shape the
+/// generated harness emits for every ordinary test. `body` returns anything
+/// [`Into<TestResult>`] (`()` for a plain test, a [`TestResult`] for one that may
+/// [`skipped`]).
+pub fn test<E, F, T>(name: impl Into<Cow<'static, str>>, group: E, body: F) -> Test<E>
+where
+    E: Default,
+    F: Fn() -> T + Send + Sync + 'static,
+    T: Into<TestResult>,
+{
+    Test::new(
+        TestFnHandle::from_boxed(body),
+        TestMeta {
+            name: name.into(),
+            extra: group,
+            ..Default::default()
+        },
+    )
+}
+
+/// Like [`test`], but the test is expected to panic (`#[panics]`). `expected`
+/// optionally requires the panic message to contain a substring (`#[panics("…")]`).
+pub fn test_should_panic<E, F, T>(
+    name: impl Into<Cow<'static, str>>,
+    group: E,
+    expected: Option<Cow<'static, str>>,
+    body: F,
+) -> Test<E>
+where
+    E: Default,
+    F: Fn() -> T + Send + Sync + 'static,
+    T: Into<TestResult>,
+{
+    let should_panic = match expected {
+        Some(msg) => PanicExpectation::ShouldPanicWithExpected(msg),
+        None => PanicExpectation::ShouldPanic,
+    };
+    Test::new(
+        TestFnHandle::from_boxed(body),
+        TestMeta {
+            name: name.into(),
+            extra: group,
+            should_panic,
+            ..Default::default()
+        },
+    )
+}
+
+/// The [`TestResult`] a test that ran to completion returns. Used as the final
+/// expression of a `#[skip]`-bearing test's body (which must return a `TestResult`
+/// so it can also return [`skipped`]).
+pub fn passed() -> TestResult {
+    TestResult(Ok(None))
+}
 
 /// Marker value a `#[skip]`ped test returns; [`SkipPanicHandler`] turns it into
 /// [`TestStatus::Ignored`], carrying the reason.
@@ -161,5 +216,25 @@ mod tests {
     fn common_prefix_counts_shared_leading_elements() {
         assert_eq!(common_prefix(&["a", "b", "c"], &["a", "b", "d"]), 2);
         assert_eq!(common_prefix::<&str>(&[], &["a"]), 0);
+    }
+
+    #[test]
+    fn test_builder_sets_name_group_and_no_panic() {
+        let t = test("m::a", "m", || ());
+        assert_eq!(t.meta.name, "m::a");
+        assert_eq!(t.meta.extra, "m");
+        assert_eq!(t.meta.should_panic, PanicExpectation::ShouldNotPanic);
+    }
+
+    #[test]
+    fn test_should_panic_builder_sets_expectation() {
+        let any = test_should_panic("m::a", "m", None, || ());
+        assert_eq!(any.meta.should_panic, PanicExpectation::ShouldPanic);
+
+        let with = test_should_panic("m::b", "m", Some("boom".into()), || ());
+        assert_eq!(
+            with.meta.should_panic,
+            PanicExpectation::ShouldPanicWithExpected("boom".into())
+        );
     }
 }

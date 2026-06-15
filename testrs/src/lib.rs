@@ -78,10 +78,11 @@
 
 pub use testrs_macros::{cases, fixture, panics, runtime, skip, tear_down, test};
 
-/// Runtime support consumed by the CLI-generated harness (the `Skipped` marker,
-/// [`SkipPanicHandler`], and small helpers). Not used by the crate under test.
-mod harness;
-pub use harness::{SkipPanicHandler, Skipped, common_prefix, skipped};
+/// Runtime support consumed by the CLI-generated harness: test constructors, the
+/// `Skipped` marker, [`SkipPanicHandler`](harness::SkipPanicHandler), and small
+/// helpers. Not used by the crate under test — its functions just keep the
+/// generated harness source compact and readable.
+pub mod harness;
 
 /// Run a future to completion. This is the runtime-agnostic default the generated
 /// harness uses for every async fixture and test when no [`runtime`] provider is

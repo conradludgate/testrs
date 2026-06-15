@@ -247,7 +247,7 @@ pub fn generate(discovery: &Discovery, graph: &Graph) -> Result<String> {
     // so the harness doesn't carry a copy of it.
     let any_skip = discovery.items.iter().any(|i| !i.skip.is_empty());
     let panic_handler = if any_skip {
-        quote! { .with_panic_handler(testrs::SkipPanicHandler) }
+        quote! { .with_panic_handler(testrs::harness::SkipPanicHandler) }
     } else {
         quote! {}
     };
@@ -321,7 +321,7 @@ pub fn generate(discovery: &Discovery, graph: &Graph) -> Result<String> {
                 };
                 {
                     let mut active = self.active.borrow_mut();
-                    let common = testrs::common_prefix(&active, target);
+                    let common = testrs::harness::common_prefix(&active, target);
                     for scope in active[common..].iter().rev() {
                         teardown_scope(scope);
                     }

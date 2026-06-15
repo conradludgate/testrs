@@ -32,7 +32,7 @@ pub(super) fn emit_test(
     // Cases render as `name{param0=value0,param1=value1}`. `{{`/`}}` escape the
     // literal braces in the generated `format!` string.
     let name_expr = if item.cases.is_empty() {
-        quote! { #name.into() }
+        quote! { #name }
     } else {
         let mut fmt = name.clone();
         fmt.push_str("{{");
@@ -65,7 +65,7 @@ pub(super) fn emit_test(
             }
         }
         fmt.push_str("}}");
-        quote! { format!(#fmt, #(#fmt_args),*).into() }
+        quote! { format!(#fmt, #(#fmt_args),*) }
     };
 
     let owned = emit_owned(discovery, graph, ti, block_on)?;
@@ -80,14 +80,6 @@ pub(super) fn emit_test(
         quote! { let c = c.borrow(); }
     };
     let owned_stmts = &owned.stmts;
-
-    let should_panic = match &item.should_panic {
-        ShouldPanic::No => quote! {},
-        ShouldPanic::Any => quote! { should_panic: PanicExpectation::ShouldPanic, },
-        ShouldPanic::With(msg) => {
-            quote! { should_panic: PanicExpectation::ShouldPanicWithExpected(#msg.into()), }
-        }
-    };
 
     // With `#[skip]`, the closure first calls each generated predicate (with the
     // same arguments as the test); the first that returns `true` yields a `Skipped`
@@ -113,7 +105,7 @@ pub(super) fn emit_test(
                 let reason = skip.reason.as_deref().unwrap_or("skipped");
                 quote! {
                     if #predicate(#(#args),*) {
-                        return testrs::skipped(#reason);
+                        return testrs::harness::skipped(#reason);
                     }
                 }
             })
@@ -125,22 +117,28 @@ pub(super) fn emit_test(
                     #(#owned_stmts)*
                     #(#checks)*
                     #call;
-                    kitest::test::TestResult(Ok(None))
+                    testrs::harness::passed()
                 })
             }
         }
     };
 
+    // Build the test with the matching `testrs::harness` constructor — keeps the
+    // generated `Test`/`TestMeta` plumbing in `testrs` rather than inline here.
+    let ctor = match &item.should_panic {
+        ShouldPanic::No => quote! {
+            testrs::harness::test(#name_expr, #key, #closure)
+        },
+        ShouldPanic::Any => quote! {
+            testrs::harness::test_should_panic(#name_expr, #key, None, #closure)
+        },
+        ShouldPanic::With(msg) => quote! {
+            testrs::harness::test_should_panic(#name_expr, #key, Some(#msg.into()), #closure)
+        },
+    };
+
     let mut body = quote! {
-        tests.push(Test::new(
-            TestFnHandle::from_boxed(#closure),
-            TestMeta {
-                name: #name_expr,
-                extra: #key,
-                #should_panic
-                ..Default::default()
-            },
-        ));
+        tests.push(#ctor);
     };
 
     // Wrap in one loop per case provider (innermost first).
