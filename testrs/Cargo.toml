@@ -10,13 +10,9 @@ description = "A pytest-like test framework with compile-time, type-based fixtur
 testrs-macros.workspace = true
 lexopt = "0.3"
 pollster = "0.4"
-# Only used by the generated harness (see the `harness` feature); kept optional so
-# crates that merely depend on `testrs` don't pull in the test runner.
-kitest = { version = "0.5", optional = true }
-
-[features]
-# Runtime support consumed by the CLI-generated harness, not the crate under test.
-harness = ["dep:kitest"]
+# Powers the runtime support the generated harness consumes (see the `harness`
+# module).
+kitest = "0.5"
 
 [lints]
 workspace = true

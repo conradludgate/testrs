@@ -1,10 +1,9 @@
 //! Runtime support for the CLI-generated kitest harness.
 //!
 //! These items are used **only** by the harness the `testrs` CLI generates under
-//! `target/` — never by the crate under test. They live behind the off-by-default
-//! `harness` feature so a crate that merely depends on `testrs` doesn't pull in
-//! `kitest`. Generating less Rust into the harness keeps that (machine-written)
-//! source small, and lets this logic be type-checked and unit-tested here.
+//! `target/` — never by the crate under test. Hosting them here (rather than
+//! emitting them into the harness) keeps that machine-written source small and
+//! lets the logic be type-checked and unit-tested.
 
 use std::borrow::Cow;
 
