@@ -25,38 +25,39 @@ use quote::quote;
 
 mod cases;
 
-/// Emit the annotated function, prefixed with a
-/// `#[diagnostic::testrs::<kind>(<args>)]` marker carrying the macro's arguments.
-///
-/// The generated kitest harness lives in a separate crate, so it can only call
-/// fixtures/tests through the crate's public path. We therefore promote a
-/// plain (private) marked function to `pub`; functions with an explicit
-/// visibility are left as written.
-fn mark(kind: &str, attr: TokenStream, item: TokenStream) -> TokenStream {
-    let kind_ident = Ident::new(kind, Span::call_site());
-    let item = ensure_pub(TokenStream2::from(item));
-
-    // Expand any `cases(...)`: relocate the expressions into generated providers,
-    // body-inject the param references, and rewrite the marker args to point at the
-    // providers. A no-op for items without `cases`.
-    let (args, item, providers) = cases::expand(TokenStream2::from(attr), item);
-
-    let marker = if args.is_empty() {
-        quote! { #[diagnostic::testrs::#kind_ident] }
+/// Build a `#[diagnostic::testrs::<kind>(<args>)]` marker (args omitted if empty).
+/// The `diagnostic` namespace is the only one rustdoc preserves verbatim, so the
+/// CLI reads these from each item's `attrs`.
+fn marker(kind: &str, args: &TokenStream2) -> TokenStream2 {
+    let kind = Ident::new(kind, Span::call_site());
+    if args.is_empty() {
+        quote! { #[diagnostic::testrs::#kind] }
     } else {
-        quote! { #[diagnostic::testrs::#kind_ident(#args)] }
-    };
+        quote! { #[diagnostic::testrs::#kind(#args)] }
+    }
+}
 
-    // The only caller of a fixture/test is the generated harness, which the
-    // compiler can't see while checking this crate — so suppress dead-code for
-    // the marked item (precisely, rather than crate-wide).
+/// A *primary* marker (`#[fixture]`/`#[test]`/`#[runtime]`/`#[tear_down]`): attach
+/// the marker, promote the function to `pub` so the (separate-crate) harness can
+/// call it, and suppress dead-code (its only caller is that harness, invisible
+/// while checking this crate).
+fn mark(kind: &str, attr: TokenStream, item: TokenStream) -> TokenStream {
+    let m = marker(kind, &attr.into());
+    let item = ensure_pub(item.into());
     quote! {
         #[allow(dead_code)]
-        #marker
+        #m
         #item
-        #providers
     }
     .into()
+}
+
+/// A *modifier* marker (`#[panics]`/`#[skip]`): attach the marker and pass the item
+/// through. The sibling `#[test]` handles `pub`/dead-code promotion.
+fn modifier(kind: &str, attr: TokenStream, item: TokenStream) -> TokenStream {
+    let m = marker(kind, &attr.into());
+    let item = TokenStream2::from(item);
+    quote! { #m #item }.into()
 }
 
 /// Prepend `pub` to the item unless it already carries a visibility. Leading
@@ -97,6 +98,22 @@ pub fn fixture(attr: TokenStream, item: TokenStream) -> TokenStream {
 #[proc_macro_attribute]
 pub fn test(attr: TokenStream, item: TokenStream) -> TokenStream {
     mark("test", attr, item)
+}
+
+/// Data-driven test cases: `#[cases(param = EXPR, ...)]`. Each `EXPR` is any
+/// expression yielding an `IntoIterator` whose item matches the parameter
+/// (`param: &T` ⇒ items of `T`); the test runs once per element of the bindings'
+/// cartesian product. Used alongside `#[test]`.
+#[proc_macro_attribute]
+pub fn cases(attr: TokenStream, item: TokenStream) -> TokenStream {
+    cases::expand(attr.into(), item.into()).into()
+}
+
+/// Expects the test to panic: `#[panics]`, or `#[panics("substring")]` to also
+/// require the panic message to contain `"substring"`. Used alongside `#[test]`.
+#[proc_macro_attribute]
+pub fn panics(attr: TokenStream, item: TokenStream) -> TokenStream {
+    modifier("panics", attr, item)
 }
 
 /// Marks the function testrs uses to run async fixtures/tests to completion —

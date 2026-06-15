@@ -9,7 +9,7 @@
 /// SHA-256 known-answer vectors, each named by its description via `TestCaseName`.
 pub mod sha256 {
     use sha2::{Digest, Sha256};
-    use testrs::{TestCaseName, test};
+    use testrs::{TestCaseName, cases, test};
 
     pub struct Vector {
         pub name: &'static str,
@@ -48,7 +48,8 @@ pub mod sha256 {
         ]
     }
 
-    #[test(cases(vector = vectors()))]
+    #[test]
+    #[cases(vector = vectors())]
     fn digest_matches(vector: &Vector) {
         let digest = Sha256::digest(vector.input);
         assert_eq!(hex::encode(digest), vector.digest);
@@ -66,7 +67,7 @@ pub mod hmac {
     use hmac::{Hmac, Mac};
     use serde::Deserialize;
     use sha2::Sha256;
-    use testrs::{TestCaseName, test};
+    use testrs::{TestCaseName, cases, test};
 
     type HmacSha256 = Hmac<Sha256>;
 
@@ -140,7 +141,8 @@ pub mod hmac {
             .collect()
     }
 
-    #[test(cases(vector = vectors()))]
+    #[test]
+    #[cases(vector = vectors())]
     fn agrees_with_wycheproof(vector: &Vector) {
         let mut mac = HmacSha256::new_from_slice(&vector.key).expect("HMAC accepts any key length");
         mac.update(&vector.msg);

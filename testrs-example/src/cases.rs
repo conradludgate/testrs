@@ -16,10 +16,11 @@
 /// right in the attribute (3 × 2 = 6 cases). `u32` has no naming trait but is
 /// `Debug`, so cases are named by `Debug`: `{x=0,y=10}`, …
 pub mod product {
-    use testrs::test;
+    use testrs::{cases, test};
 
     /// `saturating_add` is commutative across the whole grid.
-    #[test(cases(x = 0..3, y = [10, 20]))]
+    #[test]
+    #[cases(x = 0..3, y = [10, 20])]
     fn saturating_add_is_commutative(x: &u32, y: &u32) {
         assert_eq!(x.saturating_add(*y), y.saturating_add(*x));
     }
@@ -29,7 +30,7 @@ pub mod product {
 /// The cases are an inline array of values.
 pub mod display {
     use std::fmt;
-    use testrs::test;
+    use testrs::{cases, test};
 
     /// An HTTP status code, displayed as its number.
     pub struct Status(pub u16);
@@ -41,7 +42,8 @@ pub mod display {
     }
 
     /// Cases appear as `{s=200}`, `{s=404}`, `{s=500}`.
-    #[test(cases(s = [Status(200), Status(404), Status(500)]))]
+    #[test]
+    #[cases(s = [Status(200), Status(404), Status(500)])]
     fn status_is_in_range(s: &Status) {
         assert!((100..600).contains(&s.0));
     }
@@ -51,7 +53,7 @@ pub mod display {
 /// traits. The source is a function returning `impl IntoIterator` — providers
 /// needn't return a `Vec`.
 pub mod indexed {
-    use testrs::test;
+    use testrs::{cases, test};
 
     pub struct Blob(pub &'static [u8]);
 
@@ -60,7 +62,8 @@ pub mod indexed {
     }
 
     /// Cases appear as `{blob=0}`, `{blob=1}`.
-    #[test(cases(blob = blobs()))]
+    #[test]
+    #[cases(blob = blobs())]
     fn blob_is_non_empty(blob: &Blob) {
         assert!(!blob.0.is_empty());
     }

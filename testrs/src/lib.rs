@@ -8,8 +8,9 @@
 //! graph, and generates a [`kitest`](https://docs.rs/kitest) harness — no
 //! `Arc`s, no statics, no name-based matching.
 //!
-//! This crate is the runtime surface: the [`fixture`], [`test`], and
-//! [`tear_down`](macro@tear_down) attribute macros, the [`TestCaseName`] trait,
+//! This crate is the runtime surface: the [`fixture`], [`test`], [`cases`],
+//! [`panics`], [`runtime`](macro@runtime), and [`tear_down`](macro@tear_down)
+//! attribute macros, the [`TestCaseName`] trait,
 //! and [`TestArgs`] (used by the generated harness). Analysis and code generation
 //! live in the `testrs` CLI.
 //!
@@ -44,9 +45,10 @@
 //! # Markers
 //!
 //! - [`fixture`] — a function whose return type is the value it provides.
-//! - [`test`] — a test. Also supports `#[test(cases(p = expr, ...))]` for
-//!   data-driven tests (one run per element of the case expressions' cartesian product)
-//!   and `#[test(should_panic)]` / `#[test(should_panic = "msg")]`.
+//! - [`test`] — a test. Modifiers are written as sibling attributes:
+//!   - [`macro@cases`] — `#[cases(p = expr, ...)]`, data-driven tests (one run per
+//!     element of the case expressions' cartesian product).
+//!   - [`macro@panics`] — `#[panics]` / `#[panics("msg")]`, expects a panic.
 //! - [`macro@runtime`] — *(optional)* names the function that runs async
 //!   fixtures/tests to completion. Without one, testrs uses [`block_on`]
 //!   (a runtime-agnostic default); mark one to plug in tokio, async-std, etc.
@@ -71,7 +73,7 @@
 //!
 //! See the project README for the full guide.
 
-pub use testrs_macros::{fixture, runtime, tear_down, test};
+pub use testrs_macros::{cases, fixture, panics, runtime, tear_down, test};
 
 /// Run a future to completion. This is the runtime-agnostic default the generated
 /// harness uses for every async fixture and test when no [`runtime`] provider is
@@ -97,7 +99,7 @@ pub fn block_on<F: std::future::Future>(future: F) -> F::Output {
 
 /// Provides a human-readable name for a test case value.
 ///
-/// Implement this on a `#[test(cases(...))]` case's element type to control
+/// Implement this on a `#[cases(...)]` case's element type to control
 /// how its cases appear in test output. testrs prefers this over `Debug` /
 /// `Display`; if none are implemented it falls back to the case index.
 ///

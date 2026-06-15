@@ -207,10 +207,10 @@ custom `block_on` the same way. At most one `#[runtime]` per crate.
 
 ### Run a test over a table of cases
 
-The right-hand side of a `cases(param = ...)` binding is **any expression** that
-evaluates to an `IntoIterator` whose item matches the parameter — a `param: &T`
-runs once per `T`, received by reference. That can be a function call, an inline
-array or range, or anything else iterable:
+Add a `#[cases(param = ...)]` attribute alongside `#[test]`. The right-hand side
+of a binding is **any expression** that evaluates to an `IntoIterator` whose item
+matches the parameter — a `param: &T` runs once per `T`, received by reference.
+That can be a function call, an inline array or range, or anything else iterable:
 
 ```rust
 pub struct Vector { pub input: u32, pub expected: u32 }
@@ -219,12 +219,14 @@ pub fn vectors() -> Vec<Vector> {
     parse(include_str!("vectors.txt"))   // runs at collection time
 }
 
-#[test(cases(v = vectors()))]            // a provider call …
+#[test]
+#[cases(v = vectors())]                  // a provider call …
 fn checks_vector(v: &Vector) {
     assert_eq!(transform(v.input), v.expected);
 }
 
-#[test(cases(n = [2, 3, 5]))]            // … or an inline expression
+#[test]
+#[cases(n = [2, 3, 5])]                  // … or an inline expression
 fn is_prime(n: &u32) {
     assert!(prime(*n));
 }
@@ -240,7 +242,8 @@ type-checked against it: a mismatch is a compile error pointing at the `cases`.
 Name several bindings; the test runs over every combination:
 
 ```rust
-#[test(cases(l = [1, 2], r = 10..30))]   // 2 × 20 = 40 cases
+#[test]
+#[cases(l = [1, 2], r = 10..30)]         // 2 × 20 = 40 cases
 fn sums(l: &u32, r: &u32) {
     assert!(l + r > *l);
 }
@@ -263,10 +266,12 @@ impl testrs::TestCaseName for Vector {
 ### Assert that a test panics
 
 ```rust
-#[test(should_panic)]
+#[test]
+#[panics]
 fn rejects_empty() { parse("").unwrap(); }
 
-#[test(should_panic = "denominator")]      // panic message must contain this
+#[test]
+#[panics("denominator")]                   // panic message must contain this
 fn rejects_zero() { divide(1, 0); }
 ```
 
@@ -299,11 +304,12 @@ $ testrs generate my-tests          # print the generated harness source (for de
 |---|---|
 | `#[fixture]` | Marks a function as a fixture. Its return type is what it provides. |
 | `#[test]` | Marks a test function. |
-| `#[test(cases(p = expr, ...))]` | Data-driven test; runs over the cartesian product of the bindings. Each `expr` is an `IntoIterator`, and each `p` is a `&T` parameter. |
-| `#[test(should_panic)]` | The test is expected to panic. |
-| `#[test(should_panic = "msg")]` | …and its panic message must contain `"msg"`. |
+| `#[cases(p = expr, ...)]` | *(on a test)* Data-driven test; runs over the cartesian product of the bindings. Each `expr` is an `IntoIterator`, and each `p` is a `&T` parameter. |
+| `#[panics]` | *(on a test)* The test is expected to panic. |
+| `#[panics("msg")]` | …and its panic message must contain `"msg"`. |
 
-Both macros leave the function body unchanged and promote it to `pub` (so the
+`#[cases]` and `#[panics]` are sibling attributes written next to `#[test]`. The
+fixture/test macros leave the function body unchanged and promote it to `pub` (so the
 generated harness can call it).
 
 ### Parameter ownership

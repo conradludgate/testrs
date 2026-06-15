@@ -75,9 +75,10 @@ pub struct CaseParam {
     pub name_strategy: CaseNameStrategy,
 }
 
-/// Whether a test is expected to panic (`#[test(should_panic)]`).
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// Whether a test is expected to panic (`#[panics]` / `#[panics("msg")]`).
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub enum ShouldPanic {
+    #[default]
     No,
     Any,
     With(String),
@@ -144,26 +145,33 @@ pub struct Discovery {
     pub items: Vec<Discovered>,
 }
 
-/// A parsed testrs marker.
-enum ParsedMarker {
-    /// A fixture or test: kind, `cases` bindings (param → provider path), and the
-    /// panic expectation.
-    Item(MarkerKind, Vec<(String, syn::Path)>, ShouldPanic),
-    /// The `#[runtime]` async-bridge provider.
+/// The primary testrs marker on a function — mutually exclusive.
+#[derive(Clone, Copy, PartialEq)]
+enum Primary {
+    Fixture,
+    Test,
     Runtime,
-    /// A `#[tear_down]` function.
     TearDown,
 }
 
-/// The testrs marker on an item: its kind, plus any `cases(param = provider)`
-/// bindings (only meaningful on tests).
-///
-/// Markers ride in the `diagnostic::testrs::<kind>` namespace, which rustdoc
-/// preserves verbatim in `Attribute::Other`.
-fn parse_marker(attrs: &[Attribute]) -> Option<ParsedMarker> {
-    use syn::punctuated::Punctuated;
-    use syn::{Expr, ExprLit, Lit, Meta, Token};
+/// The testrs markers found on one item. Each `#[test]`/`#[cases]`/`#[panics]`/…
+/// is its own `#[diagnostic::testrs::<kind>(...)]` attribute (the namespace
+/// rustdoc preserves verbatim in `Attribute::Other`); an item merges several.
+#[derive(Default)]
+struct Markers {
+    primary: Option<Primary>,
+    /// `cases(param = provider, ...)` bindings.
+    cases: Vec<(String, syn::Path)>,
+    /// `panics` / `panics("msg")`.
+    should_panic: ShouldPanic,
+}
 
+/// Collect every `#[diagnostic::testrs::*]` marker on an item into one [`Markers`].
+fn parse_markers(attrs: &[Attribute]) -> Markers {
+    use syn::punctuated::Punctuated;
+    use syn::{Expr, Meta, Token};
+
+    let mut markers = Markers::default();
     for attr in attrs {
         let Attribute::Other(raw) = attr else {
             continue;
@@ -176,56 +184,43 @@ fn parse_marker(attrs: &[Attribute]) -> Option<ParsedMarker> {
             if !(segs.len() == 3 && segs[0].ident == "diagnostic" && segs[1].ident == "testrs") {
                 continue;
             }
-            let kind = match segs[2].ident.to_string().as_str() {
-                "fixture" => MarkerKind::Fixture,
-                "test" => MarkerKind::Test,
-                "runtime" => return Some(ParsedMarker::Runtime),
-                "tear_down" => return Some(ParsedMarker::TearDown),
-                _ => return None,
-            };
-
-            // Parse the marker args: `cases(param = provider, ...)` and
-            // `should_panic` / `should_panic = "expected"`.
-            let mut cases = Vec::new();
-            let mut should_panic = ShouldPanic::No;
-            if let Meta::List(list) = &a.meta
-                && let Ok(args) =
-                    list.parse_args_with(Punctuated::<Meta, Token![,]>::parse_terminated)
-            {
-                for arg in args {
-                    match arg {
-                        Meta::List(inner) if inner.path.is_ident("cases") => {
-                            if let Ok(pairs) = inner.parse_args_with(
-                                Punctuated::<syn::MetaNameValue, Token![,]>::parse_terminated,
-                            ) {
-                                for nv in pairs {
-                                    if let (Some(param), Expr::Path(provider)) =
-                                        (nv.path.get_ident(), &nv.value)
-                                    {
-                                        cases.push((param.to_string(), provider.path.clone()));
-                                    }
-                                }
-                            }
-                        }
-                        Meta::Path(p) if p.is_ident("should_panic") => {
-                            should_panic = ShouldPanic::Any;
-                        }
-                        Meta::NameValue(nv) if nv.path.is_ident("should_panic") => {
-                            if let Expr::Lit(ExprLit {
-                                lit: Lit::Str(s), ..
-                            }) = &nv.value
+            match segs[2].ident.to_string().as_str() {
+                "fixture" => markers.primary = Some(Primary::Fixture),
+                "test" => markers.primary = Some(Primary::Test),
+                "runtime" => markers.primary = Some(Primary::Runtime),
+                "tear_down" => markers.primary = Some(Primary::TearDown),
+                "cases" => {
+                    if let Meta::List(list) = &a.meta
+                        && let Ok(pairs) = list.parse_args_with(
+                            Punctuated::<syn::MetaNameValue, Token![,]>::parse_terminated,
+                        )
+                    {
+                        for nv in pairs {
+                            if let (Some(param), Expr::Path(provider)) =
+                                (nv.path.get_ident(), &nv.value)
                             {
-                                should_panic = ShouldPanic::With(s.value());
+                                markers
+                                    .cases
+                                    .push((param.to_string(), provider.path.clone()));
                             }
                         }
-                        _ => {}
                     }
                 }
+                "panics" => {
+                    markers.should_panic = match &a.meta {
+                        // `#[panics("substring")]`
+                        Meta::List(list) => list
+                            .parse_args::<syn::LitStr>()
+                            .map_or(ShouldPanic::Any, |s| ShouldPanic::With(s.value())),
+                        // `#[panics]`
+                        _ => ShouldPanic::Any,
+                    };
+                }
+                _ => {}
             }
-            return Some(ParsedMarker::Item(kind, cases, should_panic));
         }
     }
-    None
+    markers
 }
 
 /// Resolve a provider path (relative to the test's module, or `crate::`-absolute)
@@ -349,59 +344,76 @@ pub fn discover(manifest_path: &Path, package: &str, toolchain: &str) -> Result<
         if !matches!(item.inner, ItemEnum::Function(_)) {
             continue;
         }
-        let (kind, raw_cases, should_panic) = match parse_marker(&item.attrs) {
-            Some(ParsedMarker::Item(kind, cases, should_panic)) => (kind, cases, should_panic),
-            Some(ParsedMarker::Runtime) => {
-                // The async bridge: record its path, don't treat it as a fixture
-                // (its signature is generic and never enters the graph).
-                let name = item.name.clone().unwrap_or_default();
-                let module = module_path.get(id).cloned().unwrap_or_default();
-                let mut segments = vec![crate_name.clone()];
-                segments.extend(module);
-                segments.push(name);
-                if runtime_call.replace(segments.join("::")).is_some() {
-                    bail!("multiple `#[testrs::runtime]` functions found; only one is allowed");
+        // A function may carry several testrs markers (`test` + `cases` + `panics`,
+        // etc.); collect and merge them.
+        let markers = parse_markers(&item.attrs);
+        if markers.primary == Some(Primary::Runtime) {
+            // The async bridge: record its path, don't treat it as a fixture
+            // (its signature is generic and never enters the graph).
+            let name = item.name.clone().unwrap_or_default();
+            let module = module_path.get(id).cloned().unwrap_or_default();
+            let mut segments = vec![crate_name.clone()];
+            segments.extend(module);
+            segments.push(name);
+            if runtime_call.replace(segments.join("::")).is_some() {
+                bail!("multiple `#[testrs::runtime]` functions found; only one is allowed");
+            }
+            continue;
+        }
+        if markers.primary == Some(Primary::TearDown) {
+            // A teardown function: not a graph node — it consumes a fixture by
+            // value when that fixture's scope ends. Record its subject type so
+            // the graph can link it to the fixture it tears down.
+            let name = item.name.clone().unwrap_or_default();
+            let module = module_path.get(id).cloned().unwrap_or_default();
+            let func = resolve_free_function(
+                item,
+                krate,
+                &collection,
+                TypeAliasResolution::ResolveThrough,
+            )
+            .map_err(|e| anyhow!("resolving teardown `{name}`: {e:?}"))?;
+            let inputs = &func.header.inputs;
+            if inputs.len() != 1 {
+                bail!(
+                    "`#[tear_down]` `{name}` must take exactly one parameter (the fixture it tears down)"
+                );
+            }
+            if matches!(inputs[0].type_, Type::Reference(_)) {
+                bail!("`#[tear_down]` `{name}` must take its fixture by value, not by reference");
+            }
+            let subject = inputs[0].type_.clone();
+            let mut segments = vec![crate_name.clone()];
+            segments.extend(module.clone());
+            segments.push(name);
+            tear_downs.push(TearDown {
+                module_path: module,
+                subject,
+                call: segments.join("::"),
+                is_async: func.header.is_async,
+            });
+            continue;
+        }
+        let has_modifiers = !markers.cases.is_empty() || markers.should_panic != ShouldPanic::No;
+        let kind = match markers.primary {
+            Some(Primary::Test) => MarkerKind::Test,
+            Some(Primary::Fixture) => MarkerKind::Fixture,
+            // Runtime/TearDown are handled above; None means no `#[test]`.
+            _ => {
+                if has_modifiers {
+                    let name = item.name.clone().unwrap_or_default();
+                    bail!("`{name}` has `#[cases]`/`#[panics]` but no `#[test]`");
                 }
                 continue;
             }
-            Some(ParsedMarker::TearDown) => {
-                // A teardown function: not a graph node — it consumes a fixture by
-                // value when that fixture's scope ends. Record its subject type so
-                // the graph can link it to the fixture it tears down.
-                let name = item.name.clone().unwrap_or_default();
-                let module = module_path.get(id).cloned().unwrap_or_default();
-                let func = resolve_free_function(
-                    item,
-                    krate,
-                    &collection,
-                    TypeAliasResolution::ResolveThrough,
-                )
-                .map_err(|e| anyhow!("resolving teardown `{name}`: {e:?}"))?;
-                let inputs = &func.header.inputs;
-                if inputs.len() != 1 {
-                    bail!(
-                        "`#[tear_down]` `{name}` must take exactly one parameter (the fixture it tears down)"
-                    );
-                }
-                if matches!(inputs[0].type_, Type::Reference(_)) {
-                    bail!(
-                        "`#[tear_down]` `{name}` must take its fixture by value, not by reference"
-                    );
-                }
-                let subject = inputs[0].type_.clone();
-                let mut segments = vec![crate_name.clone()];
-                segments.extend(module.clone());
-                segments.push(name);
-                tear_downs.push(TearDown {
-                    module_path: module,
-                    subject,
-                    call: segments.join("::"),
-                    is_async: func.header.is_async,
-                });
-                continue;
-            }
-            None => continue,
         };
+        // `#[cases]`/`#[panics]` are test-only.
+        if kind == MarkerKind::Fixture && has_modifiers {
+            let name = item.name.clone().unwrap_or_default();
+            bail!("`{name}`: `#[cases]`/`#[panics]` are only valid on `#[test]`, not `#[fixture]`");
+        }
+        let raw_cases = markers.cases;
+        let should_panic = markers.should_panic;
         let name = item.name.clone().unwrap_or_default();
         let test_module = module_path.get(id).cloned().unwrap_or_default();
         let func = resolve_free_function(

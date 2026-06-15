@@ -60,7 +60,7 @@ fn seed(schema: &Schema, db: &mut Connection) -> Seed {
 /// Read-only tests share the one migrated, seeded connection.
 pub mod queries {
     use super::{Connection, Seed};
-    use testrs::{TestCaseName, test};
+    use testrs::{TestCaseName, cases, test};
 
     #[test]
     fn counts_seeded_authors(db: &Connection, _seed: &Seed) {
@@ -109,7 +109,8 @@ pub mod queries {
         ]
     }
 
-    #[test(cases(case = post_counts()))]
+    #[test]
+    #[cases(case = post_counts())]
     fn author_has_expected_posts(db: &Connection, _seed: &Seed, case: &PostCount) {
         let posts: i64 = db
             .query_row(

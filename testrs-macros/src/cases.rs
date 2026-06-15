@@ -1,12 +1,13 @@
-//! Expansion of `#[test(cases(param = EXPR, ...))]`.
+//! The `#[cases(param = EXPR, ...)]` attribute macro.
 //!
 //! Each `EXPR` is relocated into a generated `pub fn() -> impl IntoIterator<Item =
 //! T>` next to the test (`T` is the parameter's type with its leading `&`
-//! stripped), and the marker is rewritten to reference those providers. That
-//! return annotation does three jobs: it lets `EXPR` be any `IntoIterator`, it
-//! names the element type so the (separate) harness crate can collect it, and it
-//! type-checks `EXPR` against the parameter. The grammars below are parsed with
-//! unsynn.
+//! stripped), and a `#[diagnostic::testrs::cases(...)]` marker is emitted pointing
+//! at those providers. The return annotation does three jobs: it lets `EXPR` be
+//! any `IntoIterator`, it names the element type so the (separate) harness crate
+//! can collect it, and it type-checks `EXPR` against the parameter. The sibling
+//! `#[test]` handles `pub`/dead-code promotion, so this macro doesn't. The
+//! grammars below are parsed with unsynn.
 
 // unsynn's combinator parsers return `Result<_, unsynn::Error>`, whose error is
 // large; that's unsynn's type, not ours, and these parsers aren't on a hot path.
@@ -20,17 +21,13 @@ use quote::{format_ident, quote};
 #[allow(clippy::wildcard_imports)]
 use unsynn::*;
 
-/// Expand any `cases(...)` in a marker's `args` against the (pub-promoted) test
-/// `item`. Returns the (possibly rewritten) marker args, the (possibly
-/// body-injected) item, and the generated case providers — all unchanged when the
-/// item has no `cases`.
-pub(crate) fn expand(
-    args: TokenStream,
-    item: TokenStream,
-) -> (TokenStream, TokenStream, TokenStream) {
-    let bindings = cases_bindings(&args);
+/// Expand `#[cases(param = EXPR, ...)]` on a test `item`: generate the providers,
+/// body-inject the param references (so they resolve in an editor), and emit the
+/// `#[diagnostic::testrs::cases(param = provider, ...)]` marker.
+pub(crate) fn expand(attr: TokenStream, item: TokenStream) -> TokenStream {
+    let bindings = cases_bindings(attr);
     if bindings.is_empty() {
-        return (args, item, TokenStream::new());
+        return quote! { #[diagnostic::testrs::cases] #item };
     }
 
     let (fn_name, param_types) = parse_signature(&item);
@@ -51,9 +48,16 @@ pub(crate) fn expand(
         rewrites.push((param.clone(), provider));
     }
 
+    let rewritten: Vec<TokenStream> = rewrites
+        .iter()
+        .map(|(param, provider)| quote! { #param = #provider })
+        .collect();
     let item = inject_into_body(item, param_refs);
-    let args = rewrite_cases(&args, &rewrites);
-    (args, item, providers)
+    quote! {
+        #[diagnostic::testrs::cases(#(#rewritten),*)]
+        #item
+        #providers
+    }
 }
 
 // The `fn` keyword, for the signature grammar.
@@ -101,12 +105,9 @@ unsynn! {
     }
 }
 
-/// Extract `(param, expr)` from each `param = EXPR` in a `cases(...)` argument.
-fn cases_bindings(args: &TokenStream) -> Vec<(Ident, TokenStream)> {
-    let Some(inner) = group_after("cases", args) else {
-        return Vec::new();
-    };
-    parse_items::<CaseBinding>(inner)
+/// Extract `(param, expr)` from each `param = EXPR` in the `#[cases(...)]` args.
+fn cases_bindings(attr: TokenStream) -> Vec<(Ident, TokenStream)> {
+    parse_items::<CaseBinding>(attr)
         .into_iter()
         .map(|b| (b.param, b.expr.to_token_stream()))
         .collect()
@@ -147,20 +148,6 @@ fn parse_items<T: Parse>(inner: TokenStream) -> Vec<T> {
         .unwrap_or_default()
 }
 
-/// The token stream of the parenthesised group immediately following `ident`.
-fn group_after(ident: &str, args: &TokenStream) -> Option<TokenStream> {
-    let mut iter = args.clone().into_iter().peekable();
-    while let Some(tt) = iter.next() {
-        if matches!(&tt, TokenTree::Ident(id) if *id == ident)
-            && let Some(TokenTree::Group(g)) = iter.peek()
-            && g.delimiter() == Delimiter::Parenthesis
-        {
-            return Some(g.stream());
-        }
-    }
-    None
-}
-
 /// The last identifier in a token stream — a parameter pattern's binding name.
 fn last_ident(ts: &TokenStream) -> Option<String> {
     ts.clone()
@@ -190,28 +177,6 @@ fn element_type(ty: TokenStream) -> TokenStream {
         }
     }
     toks[i..].iter().cloned().collect()
-}
-
-/// Rewrite a `cases(param = EXPR, ...)` group, replacing each expression with its
-/// generated provider's name so the marker carries a plain path the CLI resolves.
-fn rewrite_cases(args: &TokenStream, rewrites: &[(Ident, Ident)]) -> TokenStream {
-    let mut tokens: Vec<TokenTree> = args.clone().into_iter().collect();
-    for i in 0..tokens.len() {
-        if matches!(&tokens[i], TokenTree::Ident(id) if *id == "cases")
-            && let Some(TokenTree::Group(g)) = tokens.get(i + 1)
-            && g.delimiter() == Delimiter::Parenthesis
-        {
-            let parts: Vec<TokenStream> = rewrites
-                .iter()
-                .map(|(param, provider)| quote! { #param = #provider })
-                .collect();
-            let mut group = Group::new(Delimiter::Parenthesis, quote! { #(#parts),* });
-            group.set_span(g.span());
-            tokens[i + 1] = TokenTree::Group(group);
-            break;
-        }
-    }
-    tokens.into_iter().collect()
 }
 
 /// Prepend statements to a function's body — the last top-level brace group of the

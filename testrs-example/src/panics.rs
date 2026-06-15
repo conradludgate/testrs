@@ -1,10 +1,9 @@
 //! Tests asserted to panic.
 //!
-//! `#[test(should_panic)]` passes if the test panics at all;
-//! `#[test(should_panic = "…")]` additionally requires the panic message to
-//! contain the given substring.
+//! `#[panics]` passes if the test panics at all; `#[panics("…")]` additionally
+//! requires the panic message to contain the given substring.
 
-use testrs::test;
+use testrs::{panics, test};
 
 /// Stand-in for code under test that's *supposed* to abort on bad input.
 fn parse_port(s: &str) -> u16 {
@@ -13,12 +12,14 @@ fn parse_port(s: &str) -> u16 {
     port
 }
 
-#[test(should_panic)]
+#[test]
+#[panics]
 fn rejects_non_numeric_port() {
     parse_port("https");
 }
 
-#[test(should_panic = "non-zero")]
+#[test]
+#[panics("non-zero")]
 fn rejects_zero_port() {
     parse_port("0");
 }
