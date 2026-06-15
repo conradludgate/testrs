@@ -207,8 +207,10 @@ custom `block_on` the same way. At most one `#[runtime]` per crate.
 
 ### Run a test over a table of cases
 
-Point `cases` at a provider function returning a `Vec<T>`; the test runs once per
-element, received by reference:
+The right-hand side of a `cases(param = ...)` binding is **any expression** that
+evaluates to an `IntoIterator` whose item matches the parameter — a `param: &T`
+runs once per `T`, received by reference. That can be a function call, an inline
+array or range, or anything else iterable:
 
 ```rust
 pub struct Vector { pub input: u32, pub expected: u32 }
@@ -217,25 +219,32 @@ pub fn vectors() -> Vec<Vector> {
     parse(include_str!("vectors.txt"))   // runs at collection time
 }
 
-#[test(cases(v = vectors))]
+#[test(cases(v = vectors()))]            // a provider call …
 fn checks_vector(v: &Vector) {
     assert_eq!(transform(v.input), v.expected);
 }
+
+#[test(cases(n = [2, 3, 5]))]            // … or an inline expression
+fn is_prime(n: &u32) {
+    assert!(prime(*n));
+}
 ```
+
+The expression must yield **owned** items of `T` (e.g. `[2, 3, 5]`, not `&ARR`),
+and may be any `IntoIterator` — a `Vec`, an array, a range, `impl IntoIterator`,
+etc. The element type is taken from the parameter, so the expression is
+type-checked against it: a mismatch is a compile error pointing at the `cases`.
 
 ### Run over a cartesian product
 
-Name several providers; the test runs over every combination:
+Name several bindings; the test runs over every combination:
 
 ```rust
-pub fn lefts()  -> Vec<u32> { vec![1, 2] }
-pub fn rights() -> Vec<u32> { vec![10, 20] }
-
-#[test(cases(l = lefts, r = rights))]   // 2 × 2 = 4 cases
+#[test(cases(l = [1, 2], r = 10..30))]   // 2 × 20 = 40 cases
 fn sums(l: &u32, r: &u32) {
     assert!(l + r > *l);
 }
-// -> sums{l=1,r=10}, sums{l=1,r=20}, sums{l=2,r=10}, sums{l=2,r=20}
+// -> sums{l=1,r=10}, sums{l=1,r=11}, …
 ```
 
 ### Give cases readable names
@@ -268,7 +277,7 @@ $ testrs test my-tests --nextest
 ```
 
 The harness implements the libtest list/filter protocol, so nextest runs each
-test in its own process. Case providers must be **deterministic** so test names
+test in its own process. Case expressions must be **deterministic** so test names
 match between nextest's list and run passes.
 
 ### Inspect without running
@@ -290,7 +299,7 @@ $ testrs generate my-tests          # print the generated harness source (for de
 |---|---|
 | `#[fixture]` | Marks a function as a fixture. Its return type is what it provides. |
 | `#[test]` | Marks a test function. |
-| `#[test(cases(p = provider, ...))]` | Data-driven test; runs over the cartesian product of the providers. Each `p` is a `&T` parameter. |
+| `#[test(cases(p = expr, ...))]` | Data-driven test; runs over the cartesian product of the bindings. Each `expr` is an `IntoIterator`, and each `p` is a `&T` parameter. |
 | `#[test(should_panic)]` | The test is expected to panic. |
 | `#[test(should_panic = "msg")]` | …and its panic message must contain `"msg"`. |
 
@@ -329,19 +338,20 @@ pub trait TestCaseName {
 }
 ```
 
-Implement it on a case (provider element) type to control how its cases are named
-in output. testrs prefers it over `Debug`/`Display`.
+Implement it on a case (element) type to control how its cases are named in
+output. testrs prefers it over `Debug`/`Display`.
 
-### Case providers
+### Case expressions
 
-A `cases` provider is a **plain function** (not marked) that:
+The `expr` in `cases(p = expr)` is evaluated **at collection time** (before any
+fixtures exist), so it must be **self-contained**. It can be any expression in
+scope — an inline array/range, a `Vec`, or a function call — that yields an
+`IntoIterator` of **owned** `T`, where the test parameter is `p: &T`. Behind the
+scenes testrs wraps it in a generated `fn() -> impl IntoIterator<Item = T>`, which
+is what type-checks `expr` against the parameter and lets the harness collect it.
 
-- is **`pub`** and reachable by the path you name (`provider`, or `crate::a::provider`),
-- returns **`Vec<T>`**,
-- is **synchronous** and **self-contained** (it runs at collection time, before
-  any fixtures exist).
-
-The case type `T` must be `Sync + 'static`.
+The case type `T` must be `Sync + 'static`. For determinism under nextest, the
+expression must produce the same sequence on every run.
 
 ### Crate setup requirements
 
@@ -438,10 +448,11 @@ Not yet supported (contributions/ideas welcome):
 
 - Generic fixture/case types.
 - A shared (ancestor) fixture that takes an owned dependency.
-- Case providers that are `async`, use fixtures, or return `impl IntoIterator`.
+- Case expressions that are `async` or use fixtures (they run at collection time,
+  before any fixtures exist).
 - Per-case expansion is not yet pruned when nextest runs a single case.
-- `#[ignore]`/skip, tags/filtering by tag, parametrize-with-literals, property
-  testing, shuffling/sharding/seeds.
+- `#[ignore]`/skip, tags/filtering by tag, property testing,
+  shuffling/sharding/seeds.
 
 ## License
 

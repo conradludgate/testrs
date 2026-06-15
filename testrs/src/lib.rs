@@ -44,8 +44,8 @@
 //! # Markers
 //!
 //! - [`fixture`] — a function whose return type is the value it provides.
-//! - [`test`] — a test. Also supports `#[test(cases(p = provider, ...))]` for
-//!   data-driven tests (one run per element of the providers' cartesian product)
+//! - [`test`] — a test. Also supports `#[test(cases(p = expr, ...))]` for
+//!   data-driven tests (one run per element of the case expressions' cartesian product)
 //!   and `#[test(should_panic)]` / `#[test(should_panic = "msg")]`.
 //! - [`macro@runtime`] — *(optional)* names the function that runs async
 //!   fixtures/tests to completion. Without one, testrs uses [`block_on`]
@@ -97,7 +97,7 @@ pub fn block_on<F: std::future::Future>(future: F) -> F::Output {
 
 /// Provides a human-readable name for a test case value.
 ///
-/// Implement this on a `#[test(cases(...))]` provider's element type to control
+/// Implement this on a `#[test(cases(...))]` case's element type to control
 /// how its cases appear in test output. testrs prefers this over `Debug` /
 /// `Display`; if none are implemented it falls back to the case index.
 ///
