@@ -1,0 +1,3 @@
+# Product/spec names that clippy's `doc_markdown` lint mistakes for code
+# identifiers. `".."` appends to clippy's built-in allow list.
+doc-valid-idents = ["SQLite", ".."]

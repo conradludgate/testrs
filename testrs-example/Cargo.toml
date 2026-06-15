@@ -7,6 +7,13 @@ publish = false
 
 [dependencies]
 testrs = { path = "../testrs" }
+# In-memory database for the `sqlite` examples. `bundled` compiles SQLite from
+# source, so there's no system dependency.
+rusqlite = { version = "0.32", features = ["bundled"] }
+# Crypto test-vector suites (`crypto`).
+sha2 = "0.10"
+hmac = "0.12"
+hex = "0.4"
 # Used by the crate's `#[testrs::runtime]` async bridge (see `async_runtime`).
 tokio = { version = "1", features = ["rt-multi-thread", "time"] }
 
