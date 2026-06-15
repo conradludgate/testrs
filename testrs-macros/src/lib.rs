@@ -16,7 +16,7 @@
 //! ```
 
 use proc_macro::TokenStream;
-use proc_macro2::{Delimiter, Ident, Span, TokenStream as TokenStream2, TokenTree};
+use proc_macro2::{Delimiter, Group, Ident, Span, TokenStream as TokenStream2, TokenTree};
 use quote::quote;
 
 /// Emit the annotated function, prefixed with a
@@ -29,13 +29,28 @@ use quote::quote;
 fn mark(kind: &str, attr: TokenStream, item: TokenStream) -> TokenStream {
     let kind = Ident::new(kind, Span::call_site());
     let args = TokenStream2::from(attr);
-    let item = ensure_pub(TokenStream2::from(item));
+    let mut item = ensure_pub(TokenStream2::from(item));
 
     let marker = if args.is_empty() {
         quote! { #[diagnostic::testrs::#kind] }
     } else {
         quote! { #[diagnostic::testrs::#kind(#args)] }
     };
+
+    // A `cases(param = provider)` binding lives only as tokens inside the inert
+    // `diagnostic` attribute, where rust-analyzer can't resolve it. Re-emit each
+    // side as a real reference at the start of the body, keeping its source spans,
+    // so go-to-definition works: `param` resolves to the function parameter (in
+    // scope there) and `provider` to its function. `&` avoids moving a non-Copy
+    // param; `let _` binds nothing and discards.
+    let bindings = cases_bindings(&args);
+    if !bindings.is_empty() {
+        let refs: TokenStream2 = bindings
+            .iter()
+            .map(|(param, provider)| quote! { let _ = &#param; let _ = &#provider; })
+            .collect();
+        item = inject_into_body(item, refs);
+    }
 
     // The only caller of a fixture/test is the generated harness, which the
     // compiler can't see while checking this crate — so suppress dead-code for
@@ -46,6 +61,74 @@ fn mark(kind: &str, attr: TokenStream, item: TokenStream) -> TokenStream {
         #item
     }
     .into()
+}
+
+/// Extract the `(param, provider)` token-streams from a `cases(param = provider,
+/// ...)` argument list — the tokens before and after each top-level `=`, with
+/// their source spans preserved — so they can be re-emitted as resolvable
+/// references.
+fn cases_bindings(args: &TokenStream2) -> Vec<(TokenStream2, TokenStream2)> {
+    // Find the `cases(...)` group.
+    let mut iter = args.clone().into_iter().peekable();
+    let mut inner = None;
+    while let Some(tt) = iter.next() {
+        if matches!(&tt, TokenTree::Ident(id) if *id == "cases")
+            && let Some(TokenTree::Group(g)) = iter.peek()
+            && g.delimiter() == Delimiter::Parenthesis
+        {
+            inner = Some(g.stream());
+            break;
+        }
+    }
+    let Some(inner) = inner else {
+        return Vec::new();
+    };
+
+    // Each binding is `param = provider`, comma-separated.
+    let mut bindings = Vec::new();
+    let (mut lhs, mut rhs) = (TokenStream2::new(), TokenStream2::new());
+    let mut after_eq = false;
+    for tt in inner {
+        let is_comma = matches!(&tt, TokenTree::Punct(p) if p.as_char() == ',');
+        let is_eq = matches!(&tt, TokenTree::Punct(p) if p.as_char() == '=');
+        if is_comma {
+            if !lhs.is_empty() && !rhs.is_empty() {
+                bindings.push((std::mem::take(&mut lhs), std::mem::take(&mut rhs)));
+            }
+            (lhs, rhs) = (TokenStream2::new(), TokenStream2::new());
+            after_eq = false;
+        } else if is_eq && !after_eq {
+            after_eq = true;
+        } else if after_eq {
+            rhs.extend([tt]);
+        } else {
+            lhs.extend([tt]);
+        }
+    }
+    if !lhs.is_empty() && !rhs.is_empty() {
+        bindings.push((lhs, rhs));
+    }
+    bindings
+}
+
+/// Prepend statements to a function's body — the last top-level brace group of
+/// the item's tokens. If there's no body (no brace group), the item is returned
+/// unchanged.
+fn inject_into_body(item: TokenStream2, stmts: TokenStream2) -> TokenStream2 {
+    let mut tokens: Vec<TokenTree> = item.into_iter().collect();
+    let body = tokens
+        .iter()
+        .rposition(|tt| matches!(tt, TokenTree::Group(g) if g.delimiter() == Delimiter::Brace));
+    if let Some(i) = body
+        && let TokenTree::Group(g) = &tokens[i]
+    {
+        let mut inner = stmts;
+        inner.extend(g.stream());
+        let mut new_body = Group::new(Delimiter::Brace, inner);
+        new_body.set_span(g.span());
+        tokens[i] = TokenTree::Group(new_body);
+    }
+    tokens.into_iter().collect()
 }
 
 /// Prepend `pub` to the item unless it already carries a visibility. Leading
