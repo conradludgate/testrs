@@ -38,6 +38,25 @@ fn render_type(ty: &Type) -> Result<String> {
     }
 }
 
+/// Collect the crate roots (first path segment) named by a type, so the harness
+/// can declare them as dependencies. Recurses through references and tuples.
+pub(super) fn collect_crate_refs(ty: &Type, out: &mut std::collections::BTreeSet<String>) {
+    match ty {
+        Type::Path(p) => {
+            if let Some(root) = p.base_type.first() {
+                out.insert(root.clone());
+            }
+        }
+        Type::Reference(r) => collect_crate_refs(&r.inner, out),
+        Type::Tuple(t) => {
+            for elem in &t.elements {
+                collect_crate_refs(elem, out);
+            }
+        }
+        _ => {}
+    }
+}
+
 /// A resolved type rendered as tokens, for interpolation.
 pub(super) fn type_tokens(ty: &Type) -> Result<TokenStream> {
     Ok(render_type(ty)?

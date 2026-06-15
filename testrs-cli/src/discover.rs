@@ -97,6 +97,15 @@ pub struct Discovered {
     pub should_panic: ShouldPanic,
 }
 
+/// A direct (external) dependency of the analyzed crate. Used to add it to the
+/// ephemeral harness when a shared fixture or case type names it.
+pub struct ExternalDep {
+    /// The cargo package name (the `[dependencies]` key).
+    pub package: String,
+    /// The exact resolved version, e.g. `0.32.1`.
+    pub version: String,
+}
+
 /// All testrs items discovered in a crate.
 pub struct Discovery {
     /// The crate (lib) name, underscored — used in generated code paths.
@@ -110,6 +119,10 @@ pub struct Discovery {
     /// Directory of the `testrs` crate, if the target depends on it — used to
     /// give the harness access to `testrs::TestCaseName`.
     pub testrs_manifest_dir: Option<PathBuf>,
+    /// The analyzed crate's external (registry) dependencies, keyed by the name
+    /// used in code (`-` → `_`). The harness adds any it references for a shared
+    /// fixture or case type — e.g. a fixture returning `rusqlite::Connection`.
+    pub dependencies: HashMap<String, ExternalDep>,
     /// Fully-qualified path of the `#[runtime]` async bridge, if the crate marks
     /// one (e.g. `crate_name::module::rt`). `None` falls back to `testrs::block_on`.
     pub runtime_call: Option<String>,
@@ -259,6 +272,25 @@ pub fn discover(manifest_path: &Path, package: &str, toolchain: &str) -> Result<
             .as_std_path()
             .to_path_buf()
     });
+
+    // The analyzed crate's external dependencies, so the harness can name their
+    // types (e.g. a shared fixture returning `rusqlite::Connection`). We pin the
+    // exact resolved version, so the harness compiles against the same crate the
+    // analyzed package does (cargo unifies their features within the one build).
+    let dependencies: HashMap<String, ExternalDep> = pkg
+        .direct_links()
+        .map(|link| link.to())
+        .filter(|dep| dep.source().is_external())
+        .map(|dep| {
+            (
+                dep.name().replace('-', "_"),
+                ExternalDep {
+                    package: dep.name().to_string(),
+                    version: dep.version().to_string(),
+                },
+            )
+        })
+        .collect();
 
     let cache_dir = std::env::temp_dir().join("testrs-rustdoc-cache");
     std::fs::create_dir_all(&cache_dir)?;
@@ -450,6 +482,7 @@ pub fn discover(manifest_path: &Path, package: &str, toolchain: &str) -> Result<
         manifest_dir,
         target_dir,
         testrs_manifest_dir,
+        dependencies,
         runtime_call,
         items,
     })

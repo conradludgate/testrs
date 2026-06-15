@@ -325,6 +325,29 @@ pub fn generate(discovery: &Discovery, graph: &Graph) -> Result<String> {
     Ok(source)
 }
 
+/// External crates whose types the harness names — every crate root appearing in
+/// a fixture/test signature or case element, minus the analyzed crate itself and
+/// the implicit sysroot crates (which need no `[dependencies]` entry). The runner
+/// adds each as a dependency of the ephemeral harness crate.
+pub fn external_crates(discovery: &Discovery) -> BTreeSet<String> {
+    let mut refs = BTreeSet::new();
+    for item in &discovery.items {
+        if let Some(output) = &item.sig.output {
+            render::collect_crate_refs(output, &mut refs);
+        }
+        for (_, ty) in &item.sig.inputs {
+            render::collect_crate_refs(ty, &mut refs);
+        }
+        for case in &item.cases {
+            render::collect_crate_refs(&case.element, &mut refs);
+        }
+    }
+    refs.retain(|c| {
+        c != &discovery.crate_name && !matches!(c.as_str(), "std" | "core" | "alloc" | "proc_macro")
+    });
+    refs
+}
+
 /// The chain of fixture-defining scopes (shallow → deep) that are ancestors of a
 /// group's module. These stay active for the group regardless of whether it uses
 /// them, so a common ancestor scope isn't torn down by a sibling that happens not

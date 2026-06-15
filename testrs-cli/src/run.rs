@@ -6,6 +6,7 @@
 //! target: `cargo test` runs it directly, and `cargo nextest` can discover,
 //! list, and run it process-per-test.
 
+use std::fmt::Write as _;
 use std::process::Command;
 
 use anyhow::{Context, Result, bail};
@@ -35,6 +36,22 @@ pub fn run(discovery: &Discovery, graph: &Graph, nextest: bool) -> Result<i32> {
         bail!("the analyzed crate does not depend on `testrs`");
     };
 
+    // Any external crate the harness names a type from (e.g. a shared fixture
+    // returning `rusqlite::Connection`) must be a dependency too, pinned to the
+    // same version the analyzed crate resolved.
+    let mut extra_deps = String::new();
+    for name in codegen::external_crates(discovery) {
+        let Some(dep) = discovery.dependencies.get(&name) else {
+            continue;
+        };
+        if matches!(dep.package.as_str(), "testrs" | "kitest")
+            || dep.package == discovery.package_name
+        {
+            continue;
+        }
+        let _ = writeln!(extra_deps, "{} = \"={}\"", dep.package, dep.version);
+    }
+
     // Name the harness package after the crate under test so nextest shows a
     // clean `<crate>::harness` binary id (cargo allows the same-named path dep,
     // and a test-only package needs no lib). A standalone `[workspace]` keeps
@@ -53,6 +70,7 @@ pub fn run(discovery: &Discovery, graph: &Graph, nextest: bool) -> Result<i32> {
          {package} = {{ path = {manifest_dir:?} }}\n\
          testrs = {{ path = {testrs_dir:?} }}\n\
          kitest = \"0.5\"\n\
+         {extra_deps}\
          \n\
          [[test]]\n\
          name = \"harness\"\n\
