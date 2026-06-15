@@ -15,9 +15,11 @@
 //! #![allow(unknown_or_malformed_diagnostic_attributes)]
 //! ```
 
+use std::collections::HashMap;
+
 use proc_macro::TokenStream;
-use proc_macro2::{Delimiter, Group, Ident, Span, TokenStream as TokenStream2, TokenTree};
-use quote::quote;
+use proc_macro2::{Delimiter, Group, Ident, Spacing, Span, TokenStream as TokenStream2, TokenTree};
+use quote::{format_ident, quote};
 
 /// Emit the annotated function, prefixed with a
 /// `#[diagnostic::testrs::<kind>(<args>)]` marker carrying the macro's arguments.
@@ -27,30 +29,45 @@ use quote::quote;
 /// plain (private) marked function to `pub`; functions with an explicit
 /// visibility are left as written.
 fn mark(kind: &str, attr: TokenStream, item: TokenStream) -> TokenStream {
-    let kind = Ident::new(kind, Span::call_site());
-    let args = TokenStream2::from(attr);
+    let kind_ident = Ident::new(kind, Span::call_site());
+    let mut args = TokenStream2::from(attr);
     let mut item = ensure_pub(TokenStream2::from(item));
+    let mut providers = TokenStream2::new();
 
-    let marker = if args.is_empty() {
-        quote! { #[diagnostic::testrs::#kind] }
-    } else {
-        quote! { #[diagnostic::testrs::#kind(#args)] }
-    };
-
-    // A `cases(param = provider)` binding lives only as tokens inside the inert
-    // `diagnostic` attribute, where rust-analyzer can't resolve it. Re-emit each
-    // side as a real reference at the start of the body, keeping its source spans,
-    // so go-to-definition works: `param` resolves to the function parameter (in
-    // scope there) and `provider` to its function. `&` avoids moving a non-Copy
-    // param; `let _` binds nothing and discards.
+    // For `cases(param = EXPR, ...)`, relocate each EXPR into a generated provider
+    // `fn() -> impl IntoIterator<Item = T>` next to the test, where `T` is the
+    // param's type with its leading `&` stripped. That return annotation does
+    // three jobs at once: it lets EXPR be any expression / `IntoIterator`, it names
+    // the element type so the (separate) harness crate can collect it, and it
+    // type-checks EXPR against the param. The marker is then rewritten to reference
+    // the generated providers so the CLI resolves them as ordinary functions.
     let bindings = cases_bindings(&args);
     if !bindings.is_empty() {
-        let refs: TokenStream2 = bindings
-            .iter()
-            .map(|(param, provider)| quote! { let _ = &#param; let _ = &#provider; })
-            .collect();
-        item = inject_into_body(item, refs);
+        let (fn_name, param_types) = parse_signature(&item);
+        let mut rewrites = Vec::new();
+        let mut param_refs = TokenStream2::new();
+        for (param, expr) in &bindings {
+            // Resolve the param name to the test parameter (in scope in the body).
+            param_refs.extend(quote! { let _ = &#param; });
+            let Some(elem) = param_types.get(&param.to_string()) else {
+                continue; // a typo'd param name; the ref above gives a clear error
+            };
+            let provider = format_ident!("__testrs_cases_{}_{}", fn_name, param);
+            providers.extend(quote! {
+                #[doc(hidden)]
+                pub fn #provider() -> impl ::core::iter::IntoIterator<Item = #elem> { #expr }
+            });
+            rewrites.push((param.clone(), provider));
+        }
+        item = inject_into_body(item, param_refs);
+        args = rewrite_cases(&args, &rewrites);
     }
+
+    let marker = if args.is_empty() {
+        quote! { #[diagnostic::testrs::#kind_ident] }
+    } else {
+        quote! { #[diagnostic::testrs::#kind_ident(#args)] }
+    };
 
     // The only caller of a fixture/test is the generated harness, which the
     // compiler can't see while checking this crate — so suppress dead-code for
@@ -59,16 +76,15 @@ fn mark(kind: &str, attr: TokenStream, item: TokenStream) -> TokenStream {
         #[allow(dead_code)]
         #marker
         #item
+        #providers
     }
     .into()
 }
 
-/// Extract the `(param, provider)` token-streams from a `cases(param = provider,
-/// ...)` argument list — the tokens before and after each top-level `=`, with
-/// their source spans preserved — so they can be re-emitted as resolvable
-/// references.
-fn cases_bindings(args: &TokenStream2) -> Vec<(TokenStream2, TokenStream2)> {
-    // Find the `cases(...)` group.
+/// Extract `(param, expr)` from each `param = EXPR` in a `cases(...)` argument.
+/// Bindings are split on commas at angle-bracket depth 0, so an EXPR with generic
+/// commas (`foo::<A, B>()`) stays intact.
+fn cases_bindings(args: &TokenStream2) -> Vec<(Ident, TokenStream2)> {
     let mut iter = args.clone().into_iter().peekable();
     let mut inner = None;
     while let Some(tt) = iter.next() {
@@ -84,31 +100,139 @@ fn cases_bindings(args: &TokenStream2) -> Vec<(TokenStream2, TokenStream2)> {
         return Vec::new();
     };
 
-    // Each binding is `param = provider`, comma-separated.
     let mut bindings = Vec::new();
-    let (mut lhs, mut rhs) = (TokenStream2::new(), TokenStream2::new());
-    let mut after_eq = false;
-    for tt in inner {
-        let is_comma = matches!(&tt, TokenTree::Punct(p) if p.as_char() == ',');
-        let is_eq = matches!(&tt, TokenTree::Punct(p) if p.as_char() == '=');
-        if is_comma {
-            if !lhs.is_empty() && !rhs.is_empty() {
-                bindings.push((std::mem::take(&mut lhs), std::mem::take(&mut rhs)));
-            }
-            (lhs, rhs) = (TokenStream2::new(), TokenStream2::new());
-            after_eq = false;
-        } else if is_eq && !after_eq {
-            after_eq = true;
-        } else if after_eq {
-            rhs.extend([tt]);
-        } else {
-            lhs.extend([tt]);
-        }
-    }
-    if !lhs.is_empty() && !rhs.is_empty() {
-        bindings.push((lhs, rhs));
+    for chunk in split_top_level_commas(inner) {
+        // `param = EXPR`: the first `=` separates them (the param is a bare ident).
+        let Some(eq) = chunk
+            .iter()
+            .position(|t| matches!(t, TokenTree::Punct(p) if p.as_char() == '='))
+        else {
+            continue;
+        };
+        let Some(TokenTree::Ident(param)) = chunk[..eq]
+            .iter()
+            .find(|t| matches!(t, TokenTree::Ident(_)))
+            .cloned()
+        else {
+            continue;
+        };
+        bindings.push((param, chunk[eq + 1..].iter().cloned().collect()));
     }
     bindings
+}
+
+/// The test's name and a map from parameter name to its *element* type tokens
+/// (the parameter type with a leading `&`/lifetime stripped). testrs tests are
+/// never generic, so the parameters are the first top-level parenthesised group
+/// after `fn <name>`.
+fn parse_signature(item: &TokenStream2) -> (Ident, HashMap<String, TokenStream2>) {
+    let tokens: Vec<TokenTree> = item.clone().into_iter().collect();
+    let mut name = Ident::new("unknown", Span::call_site());
+    let mut params = TokenStream2::new();
+    for (i, tt) in tokens.iter().enumerate() {
+        if matches!(tt, TokenTree::Ident(id) if *id == "fn") {
+            if let Some(TokenTree::Ident(n)) = tokens.get(i + 1) {
+                name = n.clone();
+            }
+            if let Some(TokenTree::Group(g)) = tokens[i + 2..].iter().find(
+                |t| matches!(t, TokenTree::Group(g) if g.delimiter() == Delimiter::Parenthesis),
+            ) {
+                params = g.stream();
+            }
+            break;
+        }
+    }
+
+    let mut types = HashMap::new();
+    for param in split_top_level_commas(params) {
+        // `pattern : type` — the separating colon is a lone `:` (paths use `::`).
+        let Some(colon) = param.iter().position(|t| {
+            matches!(t, TokenTree::Punct(p) if p.as_char() == ':' && p.spacing() == Spacing::Alone)
+        }) else {
+            continue;
+        };
+        // The binding name is the last ident of the pattern (skips `mut`/`ref`).
+        if let Some(TokenTree::Ident(pname)) = param[..colon]
+            .iter()
+            .rev()
+            .find(|t| matches!(t, TokenTree::Ident(_)))
+        {
+            types.insert(pname.to_string(), element_type(&param[colon + 1..]));
+        }
+    }
+    (name, types)
+}
+
+/// Split a token stream on commas at angle-bracket depth 0, so commas inside
+/// generic arguments (`HashMap<K, V>`) don't split. Groups are atomic, so their
+/// contents are never seen here; `->` is not treated as a closing `>`.
+fn split_top_level_commas(stream: TokenStream2) -> Vec<Vec<TokenTree>> {
+    let mut chunks = Vec::new();
+    let mut current = Vec::new();
+    let mut depth = 0i32;
+    let mut prev_joint_dash = false;
+    for tt in stream {
+        match &tt {
+            TokenTree::Punct(p) if p.as_char() == '<' => depth += 1,
+            TokenTree::Punct(p) if p.as_char() == '>' && !prev_joint_dash => {
+                depth = (depth - 1).max(0);
+            }
+            TokenTree::Punct(p) if p.as_char() == ',' && depth == 0 => {
+                chunks.push(std::mem::take(&mut current));
+                prev_joint_dash = false;
+                continue;
+            }
+            _ => {}
+        }
+        prev_joint_dash = matches!(&tt, TokenTree::Punct(p)
+            if p.as_char() == '-' && p.spacing() == Spacing::Joint);
+        current.push(tt);
+    }
+    if !current.is_empty() {
+        chunks.push(current);
+    }
+    chunks
+}
+
+/// Strip a leading `&`, optional lifetime, and optional `mut` from a parameter
+/// type, leaving the element type (`&Vector` → `Vector`).
+fn element_type(ty: &[TokenTree]) -> TokenStream2 {
+    let mut i = 0;
+    if matches!(ty.first(), Some(TokenTree::Punct(p)) if p.as_char() == '&') {
+        i += 1;
+        if matches!(ty.get(i), Some(TokenTree::Punct(p)) if p.as_char() == '\'') {
+            i += 1;
+            if matches!(ty.get(i), Some(TokenTree::Ident(_))) {
+                i += 1;
+            }
+        }
+        if matches!(ty.get(i), Some(TokenTree::Ident(id)) if *id == "mut") {
+            i += 1;
+        }
+    }
+    ty[i..].iter().cloned().collect()
+}
+
+/// Rewrite a `cases(param = EXPR, ...)` group, replacing each expression with its
+/// generated provider's name so the marker carries a plain path the CLI resolves.
+fn rewrite_cases(args: &TokenStream2, rewrites: &[(Ident, Ident)]) -> TokenStream2 {
+    let mut tokens: Vec<TokenTree> = args.clone().into_iter().collect();
+    for i in 0..tokens.len() {
+        if matches!(&tokens[i], TokenTree::Ident(id) if *id == "cases")
+            && let Some(TokenTree::Group(g)) = tokens.get(i + 1)
+            && g.delimiter() == Delimiter::Parenthesis
+        {
+            let parts: Vec<TokenStream2> = rewrites
+                .iter()
+                .map(|(param, provider)| quote! { #param = #provider })
+                .collect();
+            let mut group = Group::new(Delimiter::Parenthesis, quote! { #(#parts),* });
+            group.set_span(g.span());
+            tokens[i + 1] = TokenTree::Group(group);
+            break;
+        }
+    }
+    tokens.into_iter().collect()
 }
 
 /// Prepend statements to a function's body — the last top-level brace group of

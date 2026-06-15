@@ -242,24 +242,6 @@ fn provider_location(path: &syn::Path, test_module: &[String]) -> (Vec<String>, 
     }
 }
 
-/// If the raw rustdoc type is `Vec<T>`, return the raw `T`. We peel before
-/// resolving so we never have to resolve `Vec` itself (which needs `alloc`'s docs).
-fn raw_vec_element(output: &rustdoc_types::Type) -> Option<&rustdoc_types::Type> {
-    let rustdoc_types::Type::ResolvedPath(p) = output else {
-        return None;
-    };
-    if p.path != "Vec" && !p.path.ends_with("::Vec") {
-        return None;
-    }
-    let rustdoc_types::GenericArgs::AngleBracketed { args, .. } = p.args.as_deref()? else {
-        return None;
-    };
-    args.iter().find_map(|arg| match arg {
-        rustdoc_types::GenericArg::Type(t) => Some(t),
-        _ => None,
-    })
-}
-
 pub fn discover(manifest_path: &Path, package: &str, toolchain: &str) -> Result<Discovery> {
     let graph = MetadataCommand::new()
         .manifest_path(manifest_path)
@@ -429,31 +411,28 @@ pub fn discover(manifest_path: &Path, package: &str, toolchain: &str) -> Result<
             TypeAliasResolution::ResolveThrough,
         )
         .map_err(|e| anyhow!("resolving `{name}`: {e:?}"))?;
+        let ItemEnum::Function(test_fn) = &item.inner else {
+            continue;
+        };
 
         let mut cases = Vec::new();
         for (param, provider_path) in raw_cases {
             let (pmod, pname) = provider_location(&provider_path, &test_module);
-            let provider_item = index
-                .values()
-                .find(|it| {
-                    matches!(it.inner, ItemEnum::Function(_))
-                        && it.name.as_deref() == Some(pname.as_str())
-                        && module_path.get(&it.id).map(Vec::as_slice) == Some(pmod.as_slice())
-                })
-                .with_context(|| format!("case provider `{pname}` for `{name}` not found"))?;
-            let ItemEnum::Function(provider_fn) = &provider_item.inner else {
-                bail!("case provider `{pname}` is not a function");
-            };
-            if provider_fn.header.is_async {
-                bail!("case provider `{pname}` must be synchronous (async providers unsupported)");
-            }
-            // Peel `Vec<T>` from the raw signature, then resolve just the element `T`.
-            let raw_element = provider_fn
+
+            // The element type comes from the test parameter (`param: &T` ⇒ `T`),
+            // so any `IntoIterator` source works regardless of the provider's own
+            // return type.
+            let raw_param = test_fn
                 .sig
-                .output
-                .as_ref()
-                .and_then(raw_vec_element)
-                .with_context(|| format!("case provider `{pname}` must return `Vec<T>`"))?;
+                .inputs
+                .iter()
+                .find(|(n, _)| *n == param)
+                .map(|(_, t)| t)
+                .with_context(|| format!("test `{name}` has no parameter `{param}` for `cases`"))?;
+            let raw_element = match raw_param {
+                rustdoc_types::Type::BorrowedRef { type_, .. } => type_.as_ref(),
+                other => other,
+            };
             let element = resolve_type(
                 raw_element,
                 &pkg_id,
@@ -461,7 +440,7 @@ pub fn discover(manifest_path: &Path, package: &str, toolchain: &str) -> Result<
                 &GenericBindings::default(),
                 TypeAliasResolution::ResolveThrough,
             )
-            .map_err(|e| anyhow!("resolving case element type of `{pname}`: {e:?}"))?;
+            .map_err(|e| anyhow!("resolving case element type for `{param}` in `{name}`: {e:?}"))?;
 
             // Pick the naming strategy from the traits the element implements.
             // Primitives always have Debug; for a local struct/enum we scan its

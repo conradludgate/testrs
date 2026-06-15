@@ -109,7 +109,7 @@ pub mod queries {
         ]
     }
 
-    #[test(cases(case = post_counts))]
+    #[test(cases(case = post_counts()))]
     fn author_has_expected_posts(db: &Connection, _seed: &Seed, case: &PostCount) {
         let posts: i64 = db
             .query_row(
