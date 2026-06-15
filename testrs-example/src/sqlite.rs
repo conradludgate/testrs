@@ -9,7 +9,7 @@
 //! That shared-root "diamond" is something a per-instantiation fixture framework
 //! can't express: there, each `&mut` setup step would get its own database. The
 //! [`isolated`] submodule shows the opposite policy — a fresh database per test —
-//! for tests that write.
+//! for tests that write, and [`session`] shows asynchronous teardown.
 
 use rusqlite::Connection;
 use testrs::fixture;
@@ -154,5 +154,64 @@ pub mod isolated {
             .query_row("SELECT count(*) FROM authors", [], |row| row.get(0))
             .unwrap();
         assert_eq!(authors, 0);
+    }
+}
+
+/// Teardown. A `#[tear_down]` function takes a shared fixture by value when its
+/// scope ends and runs cleanup — sync or `async` (driven through the crate's
+/// `#[runtime]` bridge). It works for both, and needs no nightly `AsyncDrop`.
+///
+/// A teardown'd fixture is shared, so a test borrows it (`&Session`); taking it by
+/// value is a compile error. rusqlite is synchronous, so the `await` here is
+/// illustrative: a pooled or networked database would await while closing.
+pub mod session {
+    use rusqlite::Connection;
+    use testrs::{fixture, tear_down, test};
+
+    /// A database session, torn down when the module's tests finish.
+    pub struct Session {
+        conn: Connection,
+    }
+
+    #[fixture]
+    fn session() -> Session {
+        let conn = Connection::open_in_memory().expect("open session database");
+        conn.execute_batch("CREATE TABLE events (id INTEGER PRIMARY KEY, kind TEXT NOT NULL);")
+            .expect("create schema");
+        Session { conn }
+    }
+
+    /// Consumes the session and cleans up. Drops the table it created before the
+    /// connection closes — a real pooled/networked session would await its close.
+    #[tear_down]
+    async fn close_session(session: Session) {
+        tokio::task::yield_now().await;
+        session
+            .conn
+            .execute_batch("DROP TABLE events;")
+            .expect("drop events table");
+        let tables: i64 = session
+            .conn
+            .query_row(
+                "SELECT count(*) FROM sqlite_master WHERE type = 'table'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("count remaining tables");
+        // On stdout, the same stream kitest reports on, so it isn't lost.
+        println!("[session] dropped the events table; {tables} table(s) remain");
+    }
+
+    #[test]
+    fn records_an_event(session: &Session) {
+        session
+            .conn
+            .execute("INSERT INTO events (kind) VALUES ('login')", [])
+            .unwrap();
+        let events: i64 = session
+            .conn
+            .query_row("SELECT count(*) FROM events", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(events, 1);
     }
 }
