@@ -78,6 +78,14 @@
 
 pub use testrs_macros::{cases, fixture, panics, runtime, skip, tear_down, test};
 
+/// Runtime support for the CLI-generated harness (the `Skipped` marker,
+/// [`SkipPanicHandler`], and small helpers). Behind the off-by-default `harness`
+/// feature so a crate depending on `testrs` doesn't pull in `kitest`.
+#[cfg(feature = "harness")]
+mod harness;
+#[cfg(feature = "harness")]
+pub use harness::{SkipPanicHandler, Skipped, common_prefix, skipped};
+
 /// Run a future to completion. This is the runtime-agnostic default the generated
 /// harness uses for every async fixture and test when no [`runtime`] provider is
 /// marked.

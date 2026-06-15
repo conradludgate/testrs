@@ -68,7 +68,7 @@ pub fn run(discovery: &Discovery, graph: &Graph, nextest: bool) -> Result<i32> {
          \n\
          [dependencies]\n\
          {package} = {{ path = {manifest_dir:?} }}\n\
-         testrs = {{ path = {testrs_dir:?} }}\n\
+         testrs = {{ path = {testrs_dir:?}, features = [\"harness\"] }}\n\
          kitest = \"0.5\"\n\
          {extra_deps}\
          \n\

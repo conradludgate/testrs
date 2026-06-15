@@ -316,6 +316,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "crossbeam-channel"
+version = "0.5.15"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "82b8f8f868b36967f9606790d1903570de9ceaf870a7bf9fbbd3016d636a2cb2"
+dependencies = [
+ "crossbeam-utils",
+]
+
+[[package]]
 name = "crossbeam-deque"
 version = "0.8.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -669,6 +678,15 @@ dependencies = [
  "futures-util",
  "once_cell",
  "wasm-bindgen",
+]
+
+[[package]]
+name = "kitest"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "910fae8c27bd6e81bea7ce2e0810171d96108e04cb078db9d4976ab373837b74"
+dependencies = [
+ "crossbeam-channel",
 ]
 
 [[package]]
@@ -1374,6 +1392,7 @@ checksum = "8f50febec83f5ee1df3015341d8bd429f2d1cc62bcba7ea2076759d315084683"
 name = "testrs"
 version = "0.1.0"
 dependencies = [
+ "kitest",
  "lexopt",
  "pollster",
  "testrs-macros",

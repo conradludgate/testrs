@@ -241,86 +241,13 @@ pub fn generate(discovery: &Discovery, graph: &Graph) -> Result<String> {
         })
         .collect();
 
-    // If any test has `#[skip]`, install a panic handler that maps the `Skipped`
-    // marker a skipped test returns to `TestStatus::Ignored`. It is otherwise
-    // identical to kitest's `DefaultPanicHandler` (which we can't reuse, since it
-    // turns every `Ok(Some(_))` into `Other`), so non-skipped tests are unaffected.
+    // If any test has `#[skip]`, install `testrs::SkipPanicHandler`, which maps the
+    // `Skipped` marker a skipped test returns to `TestStatus::Ignored` (and is
+    // otherwise kitest's default behaviour). The handler and marker live in `testrs`
+    // so the harness doesn't carry a copy of it.
     let any_skip = discovery.items.iter().any(|i| !i.skip.is_empty());
-    let skip_support = if any_skip {
-        quote! {
-            #[derive(Debug, Clone, PartialEq)]
-            struct Skipped(&'static str);
-
-            impl std::fmt::Display for Skipped {
-                fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                    f.write_str(self.0)
-                }
-            }
-
-            struct SkipPanicHandler;
-
-            impl<E> kitest::panic::TestPanicHandler<E> for SkipPanicHandler {
-                fn handle<F: FnOnce() -> kitest::test::TestResult>(
-                    &self,
-                    f: F,
-                    meta: &TestMeta<E>,
-                ) -> kitest::outcome::TestStatus {
-                    use kitest::outcome::{TestFailure, TestStatus};
-                    use std::panic::{AssertUnwindSafe, catch_unwind};
-
-                    fn payload(err: Box<dyn std::any::Any + Send + 'static>) -> String {
-                        err.downcast::<&'static str>()
-                            .map(|s| s.to_string())
-                            .or_else(|err| err.downcast::<String>().map(|s| *s))
-                            .unwrap_or_else(|_| String::from("Box<dyn Any>"))
-                    }
-
-                    let result = catch_unwind(AssertUnwindSafe(f));
-                    // A test that returned our skip marker is reported ignored.
-                    // `Whatever::as_any_ref` erases at the box, not the stored value,
-                    // so recover the concrete type through `into_any` (on a clone, so
-                    // `result` stays intact for the default path below).
-                    if let Ok(kitest::test::TestResult(Ok(Some(details)))) = &result
-                        && let Ok(skip) = details.clone().into_any().downcast::<Skipped>()
-                    {
-                        return TestStatus::Ignored {
-                            reason: Some(skip.0.into()),
-                        };
-                    }
-                    // Otherwise, identical to kitest's `DefaultPanicHandler`.
-                    TestStatus::Failed(match (result, &meta.should_panic) {
-                        (Ok(result), PanicExpectation::ShouldNotPanic) => return result.into(),
-                        (Ok(_), PanicExpectation::ShouldPanic) => {
-                            TestFailure::DidNotPanic { expected: None }
-                        }
-                        (Ok(_), PanicExpectation::ShouldPanicWithExpected(expected)) => {
-                            TestFailure::DidNotPanic {
-                                expected: Some(expected.to_string()),
-                            }
-                        }
-                        (Err(err), PanicExpectation::ShouldNotPanic) => {
-                            TestFailure::Panicked(payload(err))
-                        }
-                        (Err(_), PanicExpectation::ShouldPanic) => return TestStatus::Passed,
-                        (Err(err), PanicExpectation::ShouldPanicWithExpected(expected)) => {
-                            let msg = payload(err);
-                            match msg.contains(expected.as_ref()) {
-                                true => return TestStatus::Passed,
-                                false => TestFailure::PanicMismatch {
-                                    got: msg,
-                                    expected: Some(expected.to_string()),
-                                },
-                            }
-                        }
-                    })
-                }
-            }
-        }
-    } else {
-        quote! {}
-    };
     let panic_handler = if any_skip {
-        quote! { .with_panic_handler(SkipPanicHandler) }
+        quote! { .with_panic_handler(testrs::SkipPanicHandler) }
     } else {
         quote! {}
     };
@@ -354,8 +281,6 @@ pub fn generate(discovery: &Discovery, graph: &Graph) -> Result<String> {
             static FIXTURES: RefCell<Fixtures> = RefCell::new(Fixtures::default());
         }
 
-        #skip_support
-
         struct FixtureRunner {
             active: RefCell<Vec<&'static str>>,
         }
@@ -380,10 +305,6 @@ pub fn generate(discovery: &Discovery, graph: &Graph) -> Result<String> {
 
         #teardown_all
 
-        fn common_prefix(a: &[&str], b: &[&str]) -> usize {
-            a.iter().zip(b).take_while(|(x, y)| x == y).count()
-        }
-
         impl<'t> TestGroupRunner<'t, &'static str, &'static str, ()> for FixtureRunner {
             fn run_group<F>(
                 &self,
@@ -400,7 +321,7 @@ pub fn generate(discovery: &Discovery, graph: &Graph) -> Result<String> {
                 };
                 {
                     let mut active = self.active.borrow_mut();
-                    let common = common_prefix(&active, target);
+                    let common = testrs::common_prefix(&active, target);
                     for scope in active[common..].iter().rev() {
                         teardown_scope(scope);
                     }

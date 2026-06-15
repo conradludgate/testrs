@@ -113,9 +113,7 @@ pub(super) fn emit_test(
                 let reason = skip.reason.as_deref().unwrap_or("skipped");
                 quote! {
                     if #predicate(#(#args),*) {
-                        return kitest::test::TestResult(Ok(Some(
-                            kitest::Whatever::from(Skipped(#reason)),
-                        )));
+                        return testrs::skipped(#reason);
                     }
                 }
             })
