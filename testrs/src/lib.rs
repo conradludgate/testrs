@@ -9,8 +9,8 @@
 //! `Arc`s, no statics, no name-based matching.
 //!
 //! This crate is the runtime surface: the [`fixture`], [`test`], [`cases`],
-//! [`panics`], [`runtime`](macro@runtime), and [`tear_down`](macro@tear_down)
-//! attribute macros, the [`TestCaseName`] trait,
+//! [`panics`], [`skip`], [`runtime`](macro@runtime), and
+//! [`tear_down`](macro@tear_down) attribute macros, the [`TestCaseName`] trait,
 //! and [`TestArgs`] (used by the generated harness). Analysis and code generation
 //! live in the `testrs` CLI.
 //!
@@ -49,6 +49,8 @@
 //!   - [`macro@cases`] — `#[cases(p = expr, ...)]`, data-driven tests (one run per
 //!     element of the case expressions' cartesian product).
 //!   - [`macro@panics`] — `#[panics]` / `#[panics("msg")]`, expects a panic.
+//!   - [`macro@skip`] — `#[skip(if = expr, reason = "...")]`, skips the test at run
+//!     time (reported ignored) when `expr`, evaluated with its fixtures, is `true`.
 //! - [`macro@runtime`] — *(optional)* names the function that runs async
 //!   fixtures/tests to completion. Without one, testrs uses [`block_on`]
 //!   (a runtime-agnostic default); mark one to plug in tokio, async-std, etc.
@@ -73,7 +75,7 @@
 //!
 //! See the project README for the full guide.
 
-pub use testrs_macros::{cases, fixture, panics, runtime, tear_down, test};
+pub use testrs_macros::{cases, fixture, panics, runtime, skip, tear_down, test};
 
 /// Run a future to completion. This is the runtime-agnostic default the generated
 /// harness uses for every async fixture and test when no [`runtime`] provider is

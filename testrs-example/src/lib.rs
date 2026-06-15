@@ -13,6 +13,7 @@
 //!   pattern testrs is built for, using real published vectors.
 //! - [`cases`] — the case system itself: cartesian products and case naming.
 //! - [`panics`] — tests asserted to panic.
+//! - [`skip`] — a test that decides at run time, from its fixtures, to skip.
 //! - [`async_runtime`] — async fixtures/tests driven through a `#[testrs::runtime]`
 //!   bridge.
 #![allow(unknown_or_malformed_diagnostic_attributes)]
@@ -21,4 +22,5 @@ pub mod async_runtime;
 pub mod cases;
 pub mod crypto;
 pub mod panics;
+pub mod skip;
 pub mod sqlite;

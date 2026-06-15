@@ -84,6 +84,17 @@ pub enum ShouldPanic {
     With(String),
 }
 
+/// A `#[skip(if = ..., reason = ...)]` modifier: a generated predicate the harness
+/// evaluates (with the test's fixtures) to decide, at run time, whether to skip.
+pub struct Skip {
+    /// Fully-qualified call path of the generated `-> bool` predicate, e.g.
+    /// `crate_name::module::__testrs_skip_my_test`.
+    pub call: String,
+    /// The reason reported when the test is skipped (defaults to the condition's
+    /// source text in the macro, so this is always populated in practice).
+    pub reason: Option<String>,
+}
+
 /// A discovered fixture or test, with its module-tree position and signature.
 pub struct Discovered {
     pub kind: MarkerKind,
@@ -96,6 +107,8 @@ pub struct Discovered {
     pub cases: Vec<CaseParam>,
     /// Panic expectation for a test.
     pub should_panic: ShouldPanic,
+    /// Conditional run-time skip, if the test has `#[skip(...)]`.
+    pub skip: Option<Skip>,
 }
 
 /// A `#[tear_down]` function: cleanup for the fixture it consumes by value, run
@@ -164,6 +177,8 @@ struct Markers {
     cases: Vec<(String, syn::Path)>,
     /// `panics` / `panics("msg")`.
     should_panic: ShouldPanic,
+    /// `skip(cond = predicate, reason = "...")`: the predicate path and reason.
+    skip: Option<(syn::Path, Option<String>)>,
 }
 
 /// Collect every `#[diagnostic::testrs::*]` marker on an item into one [`Markers`].
@@ -215,6 +230,37 @@ fn parse_markers(attrs: &[Attribute]) -> Markers {
                         // `#[panics]`
                         _ => ShouldPanic::Any,
                     };
+                }
+                "skip" => {
+                    if let Meta::List(list) = &a.meta
+                        && let Ok(pairs) = list.parse_args_with(
+                            Punctuated::<syn::MetaNameValue, Token![,]>::parse_terminated,
+                        )
+                    {
+                        let (mut cond, mut reason) = (None, None);
+                        for nv in pairs {
+                            match nv.path.get_ident().map(ToString::to_string).as_deref() {
+                                Some("cond") => {
+                                    if let Expr::Path(p) = &nv.value {
+                                        cond = Some(p.path.clone());
+                                    }
+                                }
+                                Some("reason") => {
+                                    if let Expr::Lit(syn::ExprLit {
+                                        lit: syn::Lit::Str(s),
+                                        ..
+                                    }) = &nv.value
+                                    {
+                                        reason = Some(s.value());
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
+                        if let Some(cond) = cond {
+                            markers.skip = Some((cond, reason));
+                        }
+                    }
                 }
                 _ => {}
             }
@@ -394,7 +440,9 @@ pub fn discover(manifest_path: &Path, package: &str, toolchain: &str) -> Result<
             });
             continue;
         }
-        let has_modifiers = !markers.cases.is_empty() || markers.should_panic != ShouldPanic::No;
+        let has_modifiers = !markers.cases.is_empty()
+            || markers.should_panic != ShouldPanic::No
+            || markers.skip.is_some();
         let kind = match markers.primary {
             Some(Primary::Test) => MarkerKind::Test,
             Some(Primary::Fixture) => MarkerKind::Fixture,
@@ -402,18 +450,21 @@ pub fn discover(manifest_path: &Path, package: &str, toolchain: &str) -> Result<
             _ => {
                 if has_modifiers {
                     let name = item.name.clone().unwrap_or_default();
-                    bail!("`{name}` has `#[cases]`/`#[panics]` but no `#[test]`");
+                    bail!("`{name}` has `#[cases]`/`#[panics]`/`#[skip]` but no `#[test]`");
                 }
                 continue;
             }
         };
-        // `#[cases]`/`#[panics]` are test-only.
+        // `#[cases]`/`#[panics]`/`#[skip]` are test-only.
         if kind == MarkerKind::Fixture && has_modifiers {
             let name = item.name.clone().unwrap_or_default();
-            bail!("`{name}`: `#[cases]`/`#[panics]` are only valid on `#[test]`, not `#[fixture]`");
+            bail!(
+                "`{name}`: `#[cases]`/`#[panics]`/`#[skip]` are only valid on `#[test]`, not `#[fixture]`"
+            );
         }
         let raw_cases = markers.cases;
         let should_panic = markers.should_panic;
+        let raw_skip = markers.skip;
         let name = item.name.clone().unwrap_or_default();
         let test_module = module_path.get(id).cloned().unwrap_or_default();
         let func = resolve_free_function(
@@ -502,6 +553,19 @@ pub fn discover(manifest_path: &Path, package: &str, toolchain: &str) -> Result<
             });
         }
 
+        // Resolve the `#[skip]` predicate path (relative to the test's module) to
+        // its fully-qualified call path, like a `cases` provider.
+        let skip = raw_skip.map(|(cond_path, reason)| {
+            let (smod, sname) = provider_location(&cond_path, &test_module);
+            let mut segments = vec![crate_name.clone()];
+            segments.extend(smod);
+            segments.push(sname);
+            Skip {
+                call: segments.join("::"),
+                reason,
+            }
+        });
+
         items.push(Discovered {
             kind,
             name,
@@ -518,6 +582,7 @@ pub fn discover(manifest_path: &Path, package: &str, toolchain: &str) -> Result<
             },
             cases,
             should_panic,
+            skip,
         });
     }
     items.sort_by(|a, b| (a.kind, &a.module_path, &a.name).cmp(&(b.kind, &b.module_path, &b.name)));

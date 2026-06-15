@@ -7,7 +7,8 @@
 //! any `IntoIterator`, it names the element type so the (separate) harness crate
 //! can collect it, and it type-checks `EXPR` against the parameter. The sibling
 //! `#[test]` handles `pub`/dead-code promotion, so this macro doesn't. The
-//! grammars below are parsed with unsynn.
+//! grammars below are parsed with unsynn; signature parsing is shared with
+//! `#[skip]` via [`crate::parse`].
 
 // unsynn's combinator parsers return `Result<_, unsynn::Error>`, whose error is
 // large; that's unsynn's type, not ours, and these parsers aren't on a hot path.
@@ -20,6 +21,8 @@ use quote::{format_ident, quote};
 // unsynn is designed to be glob-imported (combinators, operator names, traits).
 #[allow(clippy::wildcard_imports)]
 use unsynn::*;
+
+use crate::parse::{fn_name_and_params, last_ident, parse_items};
 
 /// Expand `#[cases(param = EXPR, ...)]` on a test `item`: generate the providers,
 /// body-inject the param references (so they resolve in an editor), and emit the
@@ -60,12 +63,9 @@ pub(crate) fn expand(attr: TokenStream, item: TokenStream) -> TokenStream {
     }
 }
 
-// The `fn` keyword, for the signature grammar.
-keyword! { KwFn = "fn"; }
-
-// Grammars for the parts of `#[test(cases(...))]` we parse with unsynn. Each item
-// ends with an optional `,` separator (a trailing comma is stripped first, see
-// `parse_items`), so items split without a dangling delimiter.
+// Grammars for the `#[cases(...)]` args we parse with unsynn. Each item ends with
+// an optional `,` separator (a trailing comma is stripped first, see
+// `crate::parse::parse_items`), so items split without a dangling delimiter.
 unsynn! {
     /// `param = EXPR`. The expression runs up to the start of the next binding — a
     /// comma followed by `IDENT =`. A comma *not* followed by that (e.g. inside a
@@ -83,26 +83,6 @@ unsynn! {
         _param: Ident,
         _eq: Assign,
     }
-
-    /// `pattern: TYPE` — one function parameter. unsynn matches the separating `:`
-    /// (a lone `Colon`, distinct from a path's `::`); testrs forbids generic
-    /// parameter types, so a plain comma always ends the type.
-    struct SigParam {
-        pattern: Many<Cons<Except<Colon>, TokenTree>>,
-        _colon: Colon,
-        ty: Many<Cons<Except<Comma>, TokenTree>>,
-        _sep: Optional<Comma>,
-    }
-
-    /// `… fn NAME(params) …` — skip attributes / visibility / qualifiers up to the
-    /// `fn` keyword, then capture the name and parameter list. testrs tests aren't
-    /// generic, so the parameters follow the name directly.
-    struct FnHeader {
-        _prefix: Many<Cons<Except<KwFn>, TokenTree>>,
-        _fn: KwFn,
-        name: Ident,
-        params: ParenthesisGroupContaining<Vec<SigParam>>,
-    }
 }
 
 /// Extract `(param, expr)` from each `param = EXPR` in the `#[cases(...)]` args.
@@ -117,46 +97,16 @@ fn cases_bindings(attr: TokenStream) -> Vec<(Ident, TokenStream)> {
 /// (the parameter type with a leading `&`/lifetime stripped).
 fn parse_signature(item: &TokenStream) -> (Ident, HashMap<String, TokenStream>) {
     let mut types = HashMap::new();
-    let mut iter = item.clone().to_token_iter();
-    let Ok(header) = FnHeader::parse(&mut iter) else {
+    let Some((name, params)) = fn_name_and_params(item) else {
         return (Ident::new("unknown", Span::call_site()), types);
     };
-    for param in header.params.content {
+    for (pattern, ty) in params {
         // The binding name is the last ident of the pattern (skips `mut`/`ref`).
-        if let Some(name) = last_ident(&param.pattern.to_token_stream()) {
-            types.insert(name, element_type(param.ty.to_token_stream()));
+        if let Some(name) = last_ident(&pattern) {
+            types.insert(name, element_type(ty));
         }
     }
-    (header.name, types)
-}
-
-/// Parse the comma-separated `T`s of a token stream. A trailing comma is stripped
-/// first so the final item parses like the others (each `T` ends with an
-/// `Optional<Comma>`); an empty or unparseable stream yields no items.
-fn parse_items<T: Parse>(inner: TokenStream) -> Vec<T> {
-    let mut toks: Vec<TokenTree> = inner.into_iter().collect();
-    if matches!(toks.last(), Some(TokenTree::Punct(p)) if p.as_char() == ',') {
-        toks.pop();
-    }
-    if toks.is_empty() {
-        return Vec::new();
-    }
-    toks.into_iter()
-        .collect::<TokenStream>()
-        .to_token_iter()
-        .parse_all::<Vec<T>>()
-        .unwrap_or_default()
-}
-
-/// The last identifier in a token stream — a parameter pattern's binding name.
-fn last_ident(ts: &TokenStream) -> Option<String> {
-    ts.clone()
-        .into_iter()
-        .filter_map(|tt| match tt {
-            TokenTree::Ident(id) => Some(id.to_string()),
-            _ => None,
-        })
-        .last()
+    (name, types)
 }
 
 /// Strip a leading `&`, optional lifetime, and optional `mut` from a parameter

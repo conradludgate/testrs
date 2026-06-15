@@ -89,15 +89,43 @@ pub(super) fn emit_test(
         }
     };
 
-    let mut body = quote! {
-        tests.push(Test::new(
-            TestFnHandle::from_boxed(move || {
+    // With `#[skip]`, the closure first calls the generated predicate (with the
+    // same arguments as the test). If it returns `true`, the test yields a `Skipped`
+    // marker that the harness's `SkipPanicHandler` turns into an ignored result;
+    // otherwise it runs the body. Without skip, the closure just runs the body.
+    let closure = if let Some(skip) = &item.skip {
+        let predicate: TokenStream = skip.call.parse().expect("valid skip predicate path");
+        let reason = skip.reason.as_deref().unwrap_or("skipped");
+        quote! {
+            move || {
+                FIXTURES.with(|c| {
+                    #borrow
+                    #(#owned_stmts)*
+                    if #predicate(#(#args),*) {
+                        return kitest::test::TestResult(Ok(Some(
+                            kitest::Whatever::from(Skipped(#reason)),
+                        )));
+                    }
+                    #call;
+                    kitest::test::TestResult(Ok(None))
+                })
+            }
+        }
+    } else {
+        quote! {
+            move || {
                 FIXTURES.with(|c| {
                     #borrow
                     #(#owned_stmts)*
                     #call;
                 });
-            }),
+            }
+        }
+    };
+
+    let mut body = quote! {
+        tests.push(Test::new(
+            TestFnHandle::from_boxed(#closure),
             TestMeta {
                 name: #name_expr,
                 extra: #key,

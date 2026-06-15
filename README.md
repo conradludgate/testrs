@@ -275,6 +275,26 @@ fn rejects_empty() { parse("").unwrap(); }
 fn rejects_zero() { divide(1, 0); }
 ```
 
+### Skip a test based on its fixtures
+
+Sometimes a test can't run meaningfully through no fault of the code — e.g. an
+object provisioned by a service comes back in a state the scenario can't exercise.
+Failing would be wrong, so `#[skip]` reports it *ignored* instead. The condition is
+a `bool` expression evaluated **at run time** with the test's fixtures (think
+pytest's `skipif`):
+
+```rust
+#[test]
+#[skip(if = ticket.id.is_multiple_of(2), reason = "even ids can't be exercised")]
+fn processes_odd_ticket(ticket: &Ticket) { /* only runs when the id is odd */ }
+```
+
+`reason` is optional (it defaults to the condition's source text). Because the
+condition runs with the fixtures, it can read their private members — it lives in
+your crate, not the generated harness. Under `--nextest`, where each test is its
+own process, a skipped test still exits cleanly and so shows as passed rather than
+ignored (nextest decides "skipped" before running).
+
 ### Run under cargo-nextest
 
 ```console
@@ -307,10 +327,11 @@ $ testrs generate my-tests          # print the generated harness source (for de
 | `#[cases(p = expr, ...)]` | *(on a test)* Data-driven test; runs over the cartesian product of the bindings. Each `expr` is an `IntoIterator`, and each `p` is a `&T` parameter. |
 | `#[panics]` | *(on a test)* The test is expected to panic. |
 | `#[panics("msg")]` | …and its panic message must contain `"msg"`. |
+| `#[skip(if = expr, reason = "...")]` | *(on a test)* Skip at run time (reported *ignored*) when `expr`, evaluated with the test's fixtures, is `true`. `reason` is optional. |
 
-`#[cases]` and `#[panics]` are sibling attributes written next to `#[test]`. The
-fixture/test macros leave the function body unchanged and promote it to `pub` (so the
-generated harness can call it).
+`#[cases]`, `#[panics]`, and `#[skip]` are sibling attributes written next to
+`#[test]`. The fixture/test macros leave the function body unchanged and promote it
+to `pub` (so the generated harness can call it).
 
 ### Parameter ownership
 
@@ -457,8 +478,8 @@ Not yet supported (contributions/ideas welcome):
 - Case expressions that are `async` or use fixtures (they run at collection time,
   before any fixtures exist).
 - Per-case expansion is not yet pruned when nextest runs a single case.
-- `#[ignore]`/skip, tags/filtering by tag, property testing,
-  shuffling/sharding/seeds.
+- Static `#[ignore]` (unconditional skip; the runtime `#[skip(if = ...)]` is
+  supported), tags/filtering by tag, property testing, shuffling/sharding/seeds.
 
 ## License
 
