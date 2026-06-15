@@ -120,14 +120,17 @@ pub fn generate(discovery: &Discovery, graph: &Graph) -> Result<String> {
         } else {
             let args = fixture_args(discovery, node, &HashMap::new());
             let call = call_tokens(discovery, fi, &args, &block_on);
-            // A `&mut` dep needs a mutable borrow of the store; disjoint fields
-            // let other `&` deps read from the same `RefMut`.
+            // A `&mut` dep needs a mutable borrow of the store, reborrowed as a
+            // plain `&mut Fixtures`: that lets the call take `&mut` one field and
+            // `&` another (e.g. `seed(schema: &Schema, db: &mut Connection)`).
+            // Field-disjoint borrows split through a reference, but *not* through
+            // `RefMut`'s `Deref`/`DerefMut`, which borrow the whole cell.
             let borrow = if node
                 .edges
                 .iter()
                 .any(|e| e.ownership == Ownership::BorrowedMut)
             {
-                quote! { let mut c = c.borrow_mut(); }
+                quote! { let mut c = c.borrow_mut(); let c = &mut *c; }
             } else {
                 quote! { let c = c.borrow(); }
             };
