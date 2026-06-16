@@ -60,7 +60,15 @@ pub(super) fn emit_test(
                 }
                 CaseNameStrategy::TestCaseName => {
                     fmt.push_str("{}");
-                    fmt_args.push(quote! { testrs::TestCaseName::case_name(&#p) });
+                    // A product holds each value as `Arc<T>` (shared across
+                    // combinations); a single param owns it directly. Either way,
+                    // borrow a `&T` for `case_name`.
+                    let r = if item.cases.len() > 1 {
+                        quote! { &*#p }
+                    } else {
+                        quote! { &#p }
+                    };
+                    fmt_args.push(quote! { testrs::TestCaseName::case_name(#r) });
                 }
             }
         }
@@ -138,8 +146,9 @@ pub(super) fn emit_test(
     // Each case test owns its value(s) so the boxed test closure stays `'static`
     // without leaking. With one param, the value is moved out of the collection
     // (`into_iter`). With several, the cartesian product reuses each value across
-    // combinations, so the innermost closure clones the values it needs — hence
-    // multi-param case types must be `Clone`.
+    // combinations, so values are shared by reference count: the collection holds
+    // `Arc<T>` and the innermost closure bumps the count (`Arc::clone`) for the
+    // combination it captures — no deep clone, so no `Clone` bound on the type.
     let body = if item.cases.is_empty() {
         quote! { tests.push(#ctor); }
     } else if item.cases.len() == 1 {
@@ -151,14 +160,14 @@ pub(super) fn emit_test(
             tests.extend(#p_cases.into_iter().enumerate().map(move |(#p_i, #p)| #ctor));
         }
     } else {
-        // Clone every param into an owned binding at the innermost level (the only
-        // place all of them are in scope), so `#ctor` sees owned values uniformly.
-        let clones: Vec<TokenStream> = item
+        // Share every param into the closure at the innermost level (the only place
+        // all of them are in scope), so `#ctor` sees an `Arc<T>` for each uniformly.
+        let shares: Vec<TokenStream> = item
             .cases
             .iter()
             .map(|case| {
                 let p = format_ident!("{}", case.param);
-                quote! { let #p = #p.clone(); }
+                quote! { let #p = std::sync::Arc::clone(#p); }
             })
             .collect();
         let mut product: Option<TokenStream> = None;
@@ -171,7 +180,7 @@ pub(super) fn emit_test(
                 // to one test.
                 None => quote! {
                     #p_cases.iter().enumerate().map(move |(#p_i, #p)| {
-                        #(#clones)*
+                        #(#shares)*
                         #ctor
                     })
                 },
@@ -187,15 +196,24 @@ pub(super) fn emit_test(
         quote! { tests.extend(#product); }
     };
 
-    // Collect each provider into an owned `Vec` the case values are taken from.
+    // Collect each provider into an owned `Vec` the case values are taken from. A
+    // product wraps them in `Arc` so each combination can share them by count.
     let mut collect = Vec::new();
     for case in &item.cases {
         let p_cases = format_ident!("{}_cases", case.param);
         let elem = type_tokens(&case.element)?;
         let provider: TokenStream = case.provider_call.parse().expect("valid provider path");
-        collect.push(quote! {
-            let #p_cases: Vec<#elem> = #provider().into_iter().collect();
-        });
+        let collected = if item.cases.len() > 1 {
+            quote! {
+                let #p_cases: Vec<std::sync::Arc<#elem>> =
+                    #provider().into_iter().map(std::sync::Arc::new).collect();
+            }
+        } else {
+            quote! {
+                let #p_cases: Vec<#elem> = #provider().into_iter().collect();
+            }
+        };
+        collect.push(collected);
     }
 
     Ok(quote! { #(#collect)* #body })
@@ -216,9 +234,14 @@ fn test_args(
         .iter()
         .map(|(param, _ty)| {
             if item.cases.iter().any(|c| &c.param == param) {
-                // Case values are owned by the closure; the test takes `&T`.
+                // Case values live in the closure (an `Arc<T>` for a product, an
+                // owned `T` otherwise); the test takes `&T`.
                 let p = format_ident!("{}", param);
-                quote! { &#p }
+                if item.cases.len() > 1 {
+                    quote! { &*#p }
+                } else {
+                    quote! { &#p }
+                }
             } else {
                 let edge = node
                     .edges
