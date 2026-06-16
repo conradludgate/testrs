@@ -135,21 +135,29 @@ pub(super) fn emit_test(
         },
     };
 
-    let mut body = quote! {
-        tests.push(#ctor);
+    // No cases: push the single test. With cases: extend with the cartesian
+    // product of the providers — `flat_map` for the outer params and `map` for the
+    // innermost, so each combination yields one test (first param outermost).
+    let body = if item.cases.is_empty() {
+        quote! { tests.push(#ctor); }
+    } else {
+        let mut product: Option<TokenStream> = None;
+        for case in item.cases.iter().rev() {
+            let p = format_ident!("{}", case.param);
+            let p_i = format_ident!("{}_i", case.param);
+            let p_cases = format_ident!("{}_cases", case.param);
+            product = Some(match product {
+                // Innermost provider: each value maps to one test.
+                None => quote! { #p_cases.iter().enumerate().map(move |(#p_i, #p)| #ctor) },
+                // Outer providers: fan each value out over the inner product.
+                Some(inner) => {
+                    quote! { #p_cases.iter().enumerate().flat_map(move |(#p_i, #p)| #inner) }
+                }
+            });
+        }
+        let product = product.expect("cases is non-empty in this branch");
+        quote! { tests.extend(#product); }
     };
-
-    // Wrap in one loop per case provider (innermost first).
-    for case in item.cases.iter().rev() {
-        let p = format_ident!("{}", case.param);
-        let p_i = format_ident!("{}_i", case.param);
-        let p_cases = format_ident!("{}_cases", case.param);
-        body = quote! {
-            for (#p_i, #p) in #p_cases.iter().enumerate() {
-                #body
-            }
-        };
-    }
 
     // Leak each provider's collection so the `&T` cases live for the whole run.
     let mut leaks = Vec::new();
