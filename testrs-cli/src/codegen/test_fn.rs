@@ -71,13 +71,13 @@ pub(super) fn emit_test(
     let owned = emit_owned(discovery, graph, ti, block_on)?;
     let args = test_args(discovery, graph, ti, &owned.locals);
     let call = call_tokens(discovery, ti, &args, block_on);
-    // An owned fixture with a `&mut` dep mutates the shared store, so borrow it
-    // mutably and reborrow as `&mut Fixtures` so disjoint fields can be projected
-    // `&mut` and `&` at once (see `codegen::generate` for why the reborrow matters).
-    let borrow = if owned.needs_mut {
-        quote! { let mut c = c.borrow_mut(); let c = &mut *c; }
+    // An owned fixture with a `&mut` dep mutates the shared store, so take the
+    // store by `&mut` (`with_borrow_mut` hands back a plain `&mut Fixtures`) so
+    // disjoint fields can be projected `&mut` and `&` at once; otherwise `&`.
+    let with = if owned.needs_mut {
+        quote! { with_borrow_mut }
     } else {
-        quote! { let c = c.borrow(); }
+        quote! { with_borrow }
     };
     let owned_stmts = &owned.stmts;
 
@@ -89,8 +89,7 @@ pub(super) fn emit_test(
     let closure = if item.skip.is_empty() {
         quote! {
             move || {
-                FIXTURES.with(|c| {
-                    #borrow
+                FIXTURES.#with(|c| {
                     #(#owned_stmts)*
                     #call;
                 });
@@ -112,8 +111,7 @@ pub(super) fn emit_test(
             .collect();
         quote! {
             move || {
-                FIXTURES.with(|c| {
-                    #borrow
+                FIXTURES.#with(|c| {
                     #(#owned_stmts)*
                     #(#checks)*
                     #call;

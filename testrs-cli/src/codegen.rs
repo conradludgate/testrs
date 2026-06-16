@@ -89,12 +89,15 @@ pub fn generate(discovery: &Discovery, graph: &Graph) -> Result<String> {
         .filter(|i| shared.contains(i) && group_shared.iter().any(|(_, _, s)| s.contains(i)))
         .collect();
 
-    // Store struct fields.
+    // Store struct fields, plus their all-`None` initializer (so the thread-local
+    // can be `const`-initialized — a derived `Default::default()` isn't `const`).
     let mut fields = Vec::new();
+    let mut none_inits = Vec::new();
     for &fi in &store_fixtures {
         let name = field_ident(discovery, fi);
         let ty = type_tokens(discovery.items[fi].sig.output.as_ref().unwrap())?;
         fields.push(quote! { #name: Option<#ty>, });
+        none_inits.push(quote! { #name: None, });
     }
 
     // `ensure_<fixture>` builds a shared fixture once, after its borrowed deps.
@@ -120,35 +123,31 @@ pub fn generate(discovery: &Discovery, graph: &Graph) -> Result<String> {
         } else {
             let args = fixture_args(discovery, node, &HashMap::new());
             let call = call_tokens(discovery, fi, &args, &block_on);
-            // A `&mut` dep needs a mutable borrow of the store, reborrowed as a
-            // plain `&mut Fixtures`: that lets the call take `&mut` one field and
-            // `&` another (e.g. `seed(schema: &Schema, db: &mut Connection)`).
-            // Field-disjoint borrows split through a reference, but *not* through
-            // `RefMut`'s `Deref`/`DerefMut`, which borrow the whole cell.
-            let borrow = if node
+            // A `&mut` dep needs `with_borrow_mut`, which hands back a plain
+            // `&mut Fixtures`: that lets the call take `&mut` one field and `&`
+            // another (e.g. `seed(schema: &Schema, db: &mut Connection)`), which
+            // field-disjoint borrows allow through a reference.
+            let with = if node
                 .edges
                 .iter()
                 .any(|e| e.ownership == Ownership::BorrowedMut)
             {
-                quote! { let mut c = c.borrow_mut(); let c = &mut *c; }
+                quote! { with_borrow_mut }
             } else {
-                quote! { let c = c.borrow(); }
+                quote! { with_borrow }
             };
             quote! {
-                let value = FIXTURES.with(|c| {
-                    #borrow
-                    #call
-                });
+                let value = FIXTURES.#with(|c| #call);
             }
         };
         ensure_methods.push(quote! {
             fn #ensure(&self) {
-                if FIXTURES.with(|c| c.borrow().#name.is_some()) {
+                if FIXTURES.with_borrow(|c| c.#name.is_some()) {
                     return;
                 }
                 #(#dep_ensures)*
                 #build
-                FIXTURES.with(|c| c.borrow_mut().#name = Some(value));
+                FIXTURES.with_borrow_mut(|c| c.#name = Some(value));
             }
         });
     }
@@ -194,12 +193,12 @@ pub fn generate(discovery: &Discovery, graph: &Graph) -> Result<String> {
                             quote! { #call(v) }
                         };
                         quote! {
-                            if let Some(v) = FIXTURES.with(|c| c.borrow_mut().#f.take()) {
+                            if let Some(v) = FIXTURES.with_borrow_mut(|c| c.#f.take()) {
                                 #invoke;
                             }
                         }
                     } else {
-                        quote! { FIXTURES.with(|c| c.borrow_mut().#f = None); }
+                        quote! { FIXTURES.with_borrow_mut(|c| c.#f = None); }
                     }
                 })
                 .collect();
@@ -272,13 +271,13 @@ pub fn generate(discovery: &Discovery, graph: &Graph) -> Result<String> {
         use kitest::prelude::*;
         use kitest::runner::SimpleRunner;
 
-        #[derive(Default)]
         struct Fixtures {
             #(#fields)*
         }
 
         thread_local! {
-            static FIXTURES: RefCell<Fixtures> = RefCell::new(Fixtures::default());
+            static FIXTURES: RefCell<Fixtures> =
+                const { RefCell::new(Fixtures { #(#none_inits)* }) };
         }
 
         struct FixtureRunner {
