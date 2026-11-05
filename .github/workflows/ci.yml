@@ -1,0 +1,24 @@
+name: CI
+
+on: [push, pull_request]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - name: Install pinned rustdoc toolchain and standard-library JSON
+        run: rustup toolchain install nightly-2026-04-16 --profile minimal --component rust-docs-json
+      - run: cargo fmt --all -- --check
+      - run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - run: cargo test --workspace --locked
+      # Marker functions are ordinary library functions until the CLI builds
+      # and runs the generated harness; cargo test alone does not execute them.
+      - name: Run the generated example harness
+        run: cargo run --locked -p testrs-cli -- test testrs-example --manifest-path testrs-example/Cargo.toml
