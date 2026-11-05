@@ -65,6 +65,6 @@ pub mod indexed {
     #[test]
     #[cases(blob = blobs())]
     fn blob_is_non_empty(blob: &Blob) {
-        assert!(!blob.0.is_empty());
+        assert_ne!(blob.0, b"");
     }
 }
