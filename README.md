@@ -54,7 +54,7 @@ This README follows the [Diátaxis](https://diataxis.fr/) model:
   nightly-only). Install the default:
 
   ```console
-  $ rustup toolchain install nightly-2026-04-16
+  $ rustup toolchain install nightly-2026-04-16 --component rust-docs-json
   ```
 
 ### 2. Create a test crate
@@ -389,7 +389,9 @@ expression must produce the same sequence on every run.
   about but otherwise ignores.)
 - Modules containing fixtures/tests must be `pub mod`.
 - The analyzed crate's only required dependency is `testrs`.
-- Have the rustdoc nightly installed (`--toolchain` to change it).
+- Have the rustdoc nightly and its `rust-docs-json` component installed
+  (`--toolchain` to change it). The component resolves standard-library types
+  such as `String` in fixture signatures.
 
 ### CLI
 

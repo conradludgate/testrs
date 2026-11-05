@@ -8,14 +8,14 @@ fn value() -> usize {
 }
 
 #[fixture]
-fn description(value: &usize) -> u64 {
-    u64::try_from(*value).unwrap() + 100
+fn description(value: &usize) -> String {
+    format!("value-{value}")
 }
 
 #[test]
-fn root(value: &usize, description: &u64) {
+fn root(value: &usize, description: &String) {
     assert_eq!(*value, 10);
-    assert_eq!(*description, 110);
+    assert_eq!(description, "value-10");
 }
 
 pub mod nested {
@@ -27,21 +27,21 @@ pub mod nested {
     }
 
     #[fixture]
-    fn description(value: &usize) -> u64 {
-        u64::try_from(*value).unwrap() + 100
+    fn description(value: &usize) -> String {
+        format!("value-{value}")
     }
 
     #[test]
-    fn child(value: &usize, description: &u64) {
+    fn child(value: &usize, description: &String) {
         assert_eq!(*value, 20);
-        assert_eq!(*description, 120);
+        assert_eq!(description, "value-20");
     }
 
     pub mod grandchild {
         #[testrs::test]
-        fn inherited(value: &usize, description: &u64) {
+        fn inherited(value: &usize, description: &String) {
             assert_eq!(*value, 20);
-            assert_eq!(*description, 120);
+            assert_eq!(description, "value-20");
         }
     }
 }
@@ -55,13 +55,13 @@ pub mod sibling {
     }
 
     #[fixture]
-    fn description(value: &usize) -> u64 {
-        u64::try_from(*value).unwrap() + 100
+    fn description(value: &usize) -> String {
+        format!("value-{value}")
     }
 
     #[test]
-    fn child(value: &usize, description: &u64) {
+    fn child(value: &usize, description: &String) {
         assert_eq!(*value, 30);
-        assert_eq!(*description, 130);
+        assert_eq!(description, "value-30");
     }
 }
