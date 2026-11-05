@@ -264,6 +264,9 @@ pub fn generate(discovery: &Discovery, graph: &Graph) -> Result<String> {
         #![allow(unknown_or_malformed_diagnostic_attributes)]
         #![allow(unused)]
 
+        // Rustdoc resolves standard allocation types to their defining crate.
+        extern crate alloc;
+
         use std::cell::RefCell;
         use std::ops::ControlFlow;
 
