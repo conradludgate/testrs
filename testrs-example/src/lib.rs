@@ -22,5 +22,6 @@ pub mod async_runtime;
 pub mod cases;
 pub mod crypto;
 pub mod panics;
+pub mod scoped_fixtures;
 pub mod skip;
 pub mod sqlite;

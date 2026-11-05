@@ -82,9 +82,9 @@ pub(super) fn scope_key(module_path: &[String]) -> String {
     }
 }
 
-/// The store field identifier for a shared fixture.
+/// A unique store field for a fixture, including when scopes reuse its name.
 pub(super) fn field_ident(discovery: &Discovery, idx: usize) -> Ident {
-    format_ident!("{}", discovery.items[idx].name)
+    format_ident!("{}_{idx}", discovery.items[idx].name)
 }
 
 /// `<block_on>(<path>(<args>))` for async items, else the bare call. `block_on`

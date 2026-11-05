@@ -108,12 +108,12 @@ pub fn generate(discovery: &Discovery, graph: &Graph) -> Result<String> {
             bail!("owned dependency of a shared fixture is not supported yet");
         }
         let name = field_ident(discovery, fi);
-        let ensure = format_ident!("ensure_{}", discovery.items[fi].name);
+        let ensure = format_ident!("ensure_{}", field_ident(discovery, fi));
         let dep_ensures: Vec<TokenStream> = node
             .edges
             .iter()
             .map(|e| {
-                let d = format_ident!("ensure_{}", discovery.items[e.target].name);
+                let d = format_ident!("ensure_{}", field_ident(discovery, e.target));
                 quote! { self.#d(); }
             })
             .collect();
@@ -160,7 +160,7 @@ pub fn generate(discovery: &Discovery, graph: &Graph) -> Result<String> {
             let calls: Vec<TokenStream> = needed
                 .iter()
                 .map(|&fi| {
-                    let e = format_ident!("ensure_{}", discovery.items[fi].name);
+                    let e = format_ident!("ensure_{}", field_ident(discovery, fi));
                     quote! { self.#e(); }
                 })
                 .collect();
